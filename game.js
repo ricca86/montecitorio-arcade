@@ -108,7 +108,7 @@ function addBox(parent, size, position, color, options = {}) {
 }
 
 function addSphere(parent, radius, position, color, scale = [1, 1, 1]) {
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 9), material(color));
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 8, 6), material(color));
   mesh.position.set(...position);
   mesh.scale.set(...scale);
   mesh.castShadow = true;
@@ -239,12 +239,39 @@ function createProp(hand, fighter) {
       addBox(prop, [0.12, 0.48, 0.14], [0.68, 0.42, 0], "#f4ca36", { rotation: [0, 0, 0.65] });
       addBox(prop, [0.3, 0.18, 0.28], [0.79, 0.2, 0], "#efbd21", { rotation: [0, 0, 0.35] });
       addBox(prop, [0.3, 0.035, 0.29], [0.82, 0.11, 0], "#6e6145");
+      const label = document.createElement("canvas");
+      label.width = 128;
+      label.height = 32;
+      const context = label.getContext("2d");
+      context.fillStyle = "#efbd21";
+      context.fillRect(0, 0, label.width, label.height);
+      context.fillStyle = "#302c24";
+      context.font = "bold 24px sans-serif";
+      context.textAlign = "center";
+      context.fillText("RUSPA", 64, 24);
+      const texture = new THREE.CanvasTexture(label);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.magFilter = THREE.NearestFilter;
+      const lettering = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.28, 0.07),
+        new THREE.MeshBasicMaterial({ map: texture })
+      );
+      lettering.position.set(0.79, 0.2, 0.145);
+      lettering.rotation.z = 0.35;
+      prop.add(lettering);
       break;
     }
-    case "briefcase":
+    case "briefcase": {
       addBox(prop, [0.55, 0.4, 0.2], [0.12, -0.15, 0], "#8c5c37");
       addBox(prop, [0.19, 0.045, 0.045], [0.12, 0.1, 0.12], "#d7b15d");
+      addBox(prop, [0.035, 0.8, 0.035], [0.4, 0.38, 0], "#d9c7a0");
+      addBox(prop, [0.48, 0.3, 0.025], [0.65, 0.64, 0], "#174a9e");
+      for (let i = 0; i < 12; i += 1) {
+        const angle = i * Math.PI / 6;
+        addSphere(prop, 0.018, [0.65 + Math.cos(angle) * 0.1, 0.64 + Math.sin(angle) * 0.1, 0.02], "#f4d94c");
+      }
       break;
+    }
     case "dossier":
       for (let i = 0; i < 5; i += 1) {
         addBox(prop, [0.64, 0.11, 0.42], [0.12, i * 0.1 - 0.19, 0.05], i % 2 ? "#fffaf0" : "#e5e1d8");
@@ -334,6 +361,11 @@ function buildFighterModel(definition, facing) {
   addBox(torso, [shoulders, 0.72, 0.45], [0, 0.38, 0], definition.suit);
   addBox(torso, [0.23, 0.6, 0.035], [0, 0.37, 0.24], definition.tie);
   addBox(torso, [0.28, 0.17, 0.035], [0, 0.67, 0.24], "#f2eee4");
+  if (definition.id === "meloni") {
+    ["#17965d", "#f7f1e4", "#d94c4c"].forEach((color, index) => {
+      addBox(torso, [0.075, 0.88, 0.03], [(index - 1) * 0.065, 0.39, 0.27], color, { rotation: [0, 0, -0.55] });
+    });
+  }
   if (definition.id === "salvini") {
     addBox(torso, [0.035, 0.66, 0.025], [0, 0.36, 0.25], "#afd0e3");
     addBox(torso, [0.22, 0.12, 0.025], [-0.23, 0.48, 0.25], "#245d9c");
@@ -371,6 +403,11 @@ function buildFighterModel(definition, facing) {
   } else if (definition.wavyHair) {
     for (let i = 0; i < 5; i += 1) {
       addSphere(head, 0.16, [-0.27 + i * 0.135, 0.31 + (i % 2) * 0.05, 0.08], definition.hair, [1, 0.8, 0.8]);
+    }
+    for (const x of [-0.34, 0.34]) {
+      for (let i = 0; i < 3; i += 1) {
+        addSphere(head, 0.15, [x + (i % 2) * 0.04, 0.14 - i * 0.16, -0.04], definition.hair);
+      }
     }
   } else if (definition.slickHair) {
     addSphere(head, 0.32, [0, 0.32, -0.1], definition.hair, [1.1, 0.7, 1]);
@@ -482,8 +519,11 @@ function disposeFighter(combatant) {
   combatant.root.traverse((part) => {
     if (!part.isMesh) return;
     part.geometry.dispose();
-    if (Array.isArray(part.material)) part.material.forEach((entry) => entry.dispose());
-    else part.material.dispose();
+    const materials = Array.isArray(part.material) ? part.material : [part.material];
+    materials.forEach((entry) => {
+      if (entry.map) entry.map.dispose();
+      entry.dispose();
+    });
   });
 }
 
@@ -933,7 +973,7 @@ function poseFighter(combatant, dt) {
   combatant.animationTime += dt;
   combatant.walkPhase += dt * (3 + movement * 6);
   const step = Math.sin(combatant.walkPhase) * movement;
-  const bounce = Math.sin(combatant.animationTime * 7);
+  const bounce = Math.sin(combatant.animationTime * 6.5);
   const wide = definition.id === "renzi" ? 0.34 : definition.id === "schlein" ? 0.27 : 0.2;
   const guard = combatant.blocking ? 0.3 : 0;
 
@@ -950,13 +990,16 @@ function poseFighter(combatant, dt) {
   joints.rightKnee.rotation.set(Math.max(0, step) * 0.4 + (bounce + 1) * 0.06, 0, -0.16);
   combatant.model.position.set(0, (bounce + 1) * 0.025, 0);
 
-  if (attack) {
-    const holdEnd = Math.min(attack.windup + 0.065, attack.duration - 0.01);
-    const strike = sampleKeyframes(attack.age, [
-      [0, 0], [attack.windup, 1], [holdEnd, 1], [attack.duration, 0]
+  combatant.root.rotation.y = 0;
+  if (attack && !combatant.airborne && combatant.landingTime <= 0) {
+    const progress = clamp(attack.age / attack.duration, 0, 1);
+    const impact = clamp(attack.windup / attack.duration, 0.01, 0.95);
+    const holdEnd = Math.min(impact + 0.065 / attack.duration, 0.98);
+    const strike = sampleKeyframes(progress, [
+      [0, 0], [impact, 1], [holdEnd, 1], [1, 0]
     ]);
-    const crouch = sampleKeyframes(attack.age, [
-      [0, 0], [attack.windup * 0.6, 1], [attack.windup, 0], [attack.duration, 0]
+    const crouch = sampleKeyframes(progress, [
+      [0, 0], [impact * 0.6, 1], [impact, 0], [1, 0]
     ]);
     const punch = (side, angle = 1.45, amount = strike) => {
       const shoulder = side === "left" ? joints.leftShoulder : joints.rightShoulder;
@@ -964,6 +1007,7 @@ function poseFighter(combatant, dt) {
       shoulder.rotation.z = THREE.MathUtils.lerp(shoulder.rotation.z, angle, amount);
       shoulder.rotation.x = THREE.MathUtils.lerp(shoulder.rotation.x, -0.05, amount);
       elbow.rotation.z = THREE.MathUtils.lerp(elbow.rotation.z, 0.08, amount);
+      joints.hips.rotation.y = amount * 0.25;
       joints.torso.rotation.y = -0.1 + amount * 0.65;
       joints.torso.rotation.z -= amount * 0.12;
     };
@@ -971,11 +1015,21 @@ function poseFighter(combatant, dt) {
       const hip = side === "left" ? joints.leftHip : joints.rightHip;
       const knee = side === "left" ? joints.leftKnee : joints.rightKnee;
       const support = side === "left" ? joints.rightKnee : joints.leftKnee;
-      hip.rotation.z = THREE.MathUtils.lerp(hip.rotation.z, 1.5, strike);
-      hip.rotation.y = -0.3 * strike;
-      knee.rotation.z = THREE.MathUtils.lerp(knee.rotation.z, 0.08, strike);
+      const roundhouse = side === "left";
+      const chamber = sampleKeyframes(progress, [
+        [0, 0], [impact * 0.55, 1], [impact, 0.15], [holdEnd, 0.15], [1, 0]
+      ]);
+      const extension = sampleKeyframes(progress, [
+        [0, 0], [impact * 0.55, 0], [impact, 1], [holdEnd, 1], [1, 0]
+      ]);
+      hip.rotation.z = THREE.MathUtils.lerp(hip.rotation.z, roundhouse ? 1.8 : 1.6, strike + chamber * (1 - strike) * 0.55);
+      hip.rotation.y = (roundhouse ? -0.85 : -0.15) * strike;
+      hip.rotation.x = (roundhouse ? -0.4 : 0.1) * strike;
+      knee.rotation.z = THREE.MathUtils.lerp(knee.rotation.z, -1.1, chamber);
+      knee.rotation.z = THREE.MathUtils.lerp(knee.rotation.z, 0.08, extension);
       support.rotation.x += 0.45 * strike;
-      joints.torso.rotation.z -= strike * 0.25;
+      joints.hips.rotation.y += (roundhouse ? 0.45 : 0.15) * strike;
+      joints.torso.rotation.z -= strike * 0.38;
     };
 
     const uppercut = attack.kind === "launcher" || (attack.special && definition.id === "meloni");
@@ -985,28 +1039,37 @@ function poseFighter(combatant, dt) {
     else if (attack.limb === "rightKick") kick("right");
 
     if (uppercut) {
-      const rise = sampleKeyframes(attack.age, [
-        [0, 0], [attack.windup * 0.6, 0], [attack.windup, 1],
-        [holdEnd, 1], [attack.duration, 0]
+      const rise = sampleKeyframes(progress, [
+        [0, 0], [impact * 0.6, 0], [impact, 1],
+        [holdEnd, 1], [1, 0]
       ]);
       punch("right", 2.55, rise);
-      joints.leftKnee.rotation.x += crouch * 0.8;
-      joints.rightKnee.rotation.x += crouch * 0.8;
+      joints.leftHip.rotation.x -= crouch * 0.65;
+      joints.rightHip.rotation.x -= crouch * 0.65;
+      joints.leftKnee.rotation.x += crouch * 1.2;
+      joints.rightKnee.rotation.x += crouch * 1.2;
       joints.hips.rotation.z -= crouch * 0.18;
       combatant.model.position.y += rise * 0.25 - crouch * 0.15;
     }
 
     if (attack.special) {
+      if (definition.id === "renzi" || definition.id === "bonelli") {
+        combatant.root.rotation.y = sampleKeyframes(progress, [
+          [0, 0], [impact * 0.25, 0], [impact, Math.PI],
+          [1, Math.PI * 2]
+        ]);
+      }
       switch (definition.id) {
         case "salvini":
-          joints.rightShoulder.rotation.z = sampleKeyframes(attack.age, [
-            [0, 1.05], [attack.windup * 0.6, 2.9], [attack.windup, 1.4],
-            [holdEnd, 1.4], [attack.duration, 1.05]
+          joints.rightShoulder.rotation.z = sampleKeyframes(progress, [
+            [0, 1.05], [impact * 0.6, 2.9], [impact, 1.4],
+            [holdEnd, 1.4], [1, 1.05]
           ]);
           joints.rightElbow.rotation.z = THREE.MathUtils.lerp(1.2, 0.2, strike);
           joints.torso.rotation.z += crouch * 0.2 - strike * 0.24;
           break;
         case "tajani":
+          joints.rightShoulder.rotation.z += crouch * 1.4;
           joints.leftShoulder.rotation.z += crouch * 0.6;
           joints.leftElbow.rotation.z += crouch * 0.4;
           joints.torso.rotation.z += crouch * 0.2;
@@ -1016,16 +1079,19 @@ function poseFighter(combatant, dt) {
           joints.torso.rotation.y += strike * 0.4;
           break;
         case "calenda":
+          joints.rightShoulder.rotation.z += crouch * 1.4;
           joints.leftShoulder.rotation.z += crouch * 0.65 - strike * 0.3;
           joints.leftElbow.rotation.z -= strike * 0.7;
           combatant.model.position.x += strike * 0.16;
           break;
         case "schlein":
+          joints.rightShoulder.rotation.z += crouch * 1.4;
           joints.rightShoulder.rotation.x -= strike * 0.9;
           joints.rightElbow.rotation.y += Math.sin(attack.age * 20) * strike * 0.5;
           joints.torso.rotation.z += strike * 0.2;
           break;
         case "conte":
+          joints.rightShoulder.rotation.z += crouch * 1.4;
           joints.rightShoulder.rotation.y -= strike * 0.6;
           joints.rightElbow.rotation.x += strike * 0.45;
           joints.head.rotation.z -= crouch * 0.15;
@@ -1043,7 +1109,7 @@ function poseFighter(combatant, dt) {
   joints.torso.rotation.z += recoil * 0.55;
   joints.head.rotation.z += recoil * 0.2;
   combatant.model.rotation.z = combatant.airRotation;
-  combatant.model.position.y += combatant.airRotation / (Math.PI / 2) * 0.38;
+  combatant.model.position.y += Math.abs(Math.sin(combatant.airRotation)) * 0.38 * definition.height;
 }
 
 function updateCombatant(combatant, dt, opponentBody) {
@@ -1069,6 +1135,7 @@ function updateCombatant(combatant, dt, opponentBody) {
     combatant.y = 0;
     if (combatant.airborne) {
       combatant.airborne = false;
+      combatant.airRotation = Math.atan2(Math.sin(combatant.airRotation), Math.cos(combatant.airRotation));
       combatant.landingTime = 0.55;
       combatant.stun = Math.max(combatant.stun, 0.55);
       shake = Math.max(shake, 0.18);
@@ -1076,10 +1143,13 @@ function updateCombatant(combatant, dt, opponentBody) {
     combatant.vy = 0;
   }
   if (combatant.airborne) {
-    combatant.airRotation = THREE.MathUtils.lerp(combatant.airRotation, Math.PI / 2, 1 - Math.exp(-10 * dt));
+    combatant.airRotation += 7 * dt;
   } else if (combatant.landingTime > 0) {
     combatant.landingTime = Math.max(0, combatant.landingTime - dt);
-    if (combatant.landingTime < 0.25) combatant.airRotation *= Math.exp(-12 * dt);
+    const targetRotation = combatant.landingTime < 0.25 ? 0 : Math.PI / 2;
+    const delta = Math.atan2(Math.sin(targetRotation - combatant.airRotation), Math.cos(targetRotation - combatant.airRotation));
+    combatant.airRotation += delta * (1 - Math.exp(-12 * dt));
+    combatant.airRotation = Math.atan2(Math.sin(combatant.airRotation), Math.cos(combatant.airRotation));
   } else {
     combatant.airRotation *= Math.exp(-12 * dt);
   }
@@ -1098,13 +1168,6 @@ function updateCombatant(combatant, dt, opponentBody) {
   }
   combatant.root.position.set(combatant.x, combatant.y, combatant.z);
   combatant.root.scale.x = combatant.facing;
-  const spin = combatant.attack?.special &&
-    (combatant.definition.id === "renzi" || combatant.definition.id === "bonelli") &&
-    !combatant.airborne && combatant.landingTime <= 0;
-  combatant.root.rotation.y = spin ? sampleKeyframes(combatant.attack.age, [
-    [0, 0], [combatant.attack.windup * 0.45, 0],
-    [combatant.attack.windup + 0.08, Math.PI], [combatant.attack.duration, Math.PI * 2]
-  ]) : 0;
   poseFighter(combatant, dt);
 }
 
@@ -1245,9 +1308,11 @@ function updateVictory(dt) {
   loser.root.position.set(loser.x, loser.y, loser.z);
   loser.root.rotation.y = 0;
   const settle = 1 - Math.exp(-8 * dt);
-  loser.airRotation = THREE.MathUtils.lerp(loser.airRotation, Math.PI / 2, settle);
+  const fall = Math.atan2(Math.sin(Math.PI / 2 - loser.airRotation), Math.cos(Math.PI / 2 - loser.airRotation));
+  loser.airRotation += fall * settle;
+  loser.airRotation = Math.atan2(Math.sin(loser.airRotation), Math.cos(loser.airRotation));
   loser.model.rotation.z = loser.airRotation;
-  loser.model.position.y = loser.airRotation / (Math.PI / 2) * 0.38;
+  loser.model.position.y = Math.abs(Math.sin(loser.airRotation)) * 0.38 * loser.definition.height;
   loser.joints.hips.rotation.z = THREE.MathUtils.lerp(loser.joints.hips.rotation.z, 0, settle);
   loser.joints.torso.rotation.y = THREE.MathUtils.lerp(loser.joints.torso.rotation.y, Math.PI / 2, settle);
   loser.joints.torso.rotation.z = THREE.MathUtils.lerp(loser.joints.torso.rotation.z, 0, settle);
@@ -1255,6 +1320,10 @@ function updateVictory(dt) {
   loser.joints.leftElbow.rotation.z = THREE.MathUtils.lerp(loser.joints.leftElbow.rotation.z, -0.4, settle);
   loser.joints.rightShoulder.rotation.z = THREE.MathUtils.lerp(loser.joints.rightShoulder.rotation.z, -1, settle);
   loser.joints.rightElbow.rotation.z = THREE.MathUtils.lerp(loser.joints.rightElbow.rotation.z, 0.4, settle);
+  for (const joint of [loser.joints.leftHip, loser.joints.rightHip, loser.joints.leftKnee, loser.joints.rightKnee]) {
+    joint.rotation.x = THREE.MathUtils.lerp(joint.rotation.x, 0, settle);
+    joint.rotation.z = THREE.MathUtils.lerp(joint.rotation.z, 0, settle);
+  }
   if (victory.time >= 1.8) resultScreen.classList.remove("hidden");
 }
 
