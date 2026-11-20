@@ -1,11 +1,15 @@
 import * as THREE from "./vendor/three/three.module.min.js";
 import { fighters } from "./fighters.js";
 import { sound } from "./sound.js";
+import { TournamentManager, difficultyForStage, formatTournamentTime } from "./tournament.js";
+import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
 
 const mount = document.querySelector("#game-canvas");
 const rosterNode = document.querySelector("#roster");
 const selectScreen = document.querySelector("#select-screen");
 const resultScreen = document.querySelector("#result-screen");
+const ladderScreen = document.querySelector("#ladder-screen");
+const continueScreen = document.querySelector("#continue-screen");
 const calloutLayer = document.querySelector("#callout-layer");
 const announcer = document.querySelector("#announcer");
 const toast = document.querySelector("#signature-toast");
@@ -34,7 +38,8 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 mount.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight("#b5a5bf", "#1a1424", 0.7));
+const ambientLight = new THREE.HemisphereLight("#b5a5bf", "#1a1424", 0.7);
+scene.add(ambientLight);
 const keyLight = new THREE.SpotLight("#ffe1a0", 190, 32, Math.PI / 3.3, 0.32, 2);
 keyLight.position.set(-2, 11, 3);
 keyLight.target.position.set(0, 0, -0.5);
@@ -65,6 +70,11 @@ const ringGeometry = new THREE.RingGeometry(0.68, 0.82, 16);
 let selectedId = null;
 let player = null;
 let opponent = null;
+let tournament = null;
+let tournamentStartedAt = 0;
+let ladderTimeout = null;
+let continueInterval = null;
+let continueDeadline = 0;
 let matchActive = false;
 let matchOver = false;
 let victory = null;
@@ -639,8 +649,9 @@ function createCombatant(definition, x, z, facing, isPlayer) {
     airborne: false,
     airRotation: 0,
     landingTime: 0,
-    comboCount: 0,
-    comboWindow: 0,
+    input: createComboInput(),
+    juggle: null,
+    hitCombo: null,
     aiState: "IDLE",
     aiTimer: random(0.3, 0.9),
     aiCombo: 0,
@@ -683,6 +694,7 @@ function selectFighter(id, focusCard = false) {
 }
 
 function showAnnouncer() {
+  announcer.querySelector("span").textContent = tournament.roundLabel;
   announcer.classList.add("show");
   window.setTimeout(() => announcer.classList.remove("show"), 1700);
 }
@@ -703,16 +715,178 @@ function disposeFighter(combatant) {
 
 function beginMatch() {
   if (!selectedId || matchActive) return;
+  tournament = new TournamentManager(selectedId);
+  tournamentStartedAt = performance.now();
+  selectScreen.classList.add("hidden");
+  showLadder();
+}
+
+function setStageMood(stage) {
+  const mood = stage < 3
+    ? { background: "#4b5267", sky: "#d7e5ff", ground: "#3d3442", ambient: 1.1, key: "#fff3d4", intensity: 210, rim: "#a7c6ff" }
+    : stage < 6
+      ? { background: "#5c3440", sky: "#ffd39b", ground: "#422332", ambient: 0.8, key: "#ffc278", intensity: 220, rim: "#e68165" }
+      : { background: "#290f22", sky: "#9a5260", ground: "#160c19", ambient: 0.55, key: "#ff6654", intensity: 230, rim: "#ffb56b" };
+  scene.background.set(mood.background);
+  scene.fog.color.set(mood.background);
+  ambientLight.color.set(mood.sky);
+  ambientLight.groundColor.set(mood.ground);
+  ambientLight.intensity = mood.ambient;
+  keyLight.color.set(mood.key);
+  keyLight.intensity = mood.intensity;
+  rimLight.color.set(mood.rim);
+}
+
+function drawLadderPortrait(canvas, fighter) {
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = fighter.color;
+  ctx.fillRect(0, 0, 96, 112);
+  ctx.fillStyle = "#25212b";
+  ctx.fillRect(0, 89, 96, 23);
+  ctx.fillStyle = fighter.suit;
+  ctx.beginPath();
+  ctx.moveTo(6, 112);
+  ctx.lineTo(13, 88);
+  ctx.lineTo(34, 79);
+  ctx.lineTo(62, 79);
+  ctx.lineTo(83, 88);
+  ctx.lineTo(90, 112);
+  ctx.fill();
+  ctx.fillStyle = "#f4eee2";
+  ctx.fillRect(40, 82, 16, 30);
+  ctx.fillStyle = fighter.tie;
+  ctx.fillRect(46, 83, 5, 29);
+  ctx.fillStyle = fighter.hair;
+  ctx.fillRect(19, 17, 58, 60);
+  if (fighter.wavyHair || fighter.id === "meloni") {
+    ctx.fillRect(15, 30, 12, 57);
+    ctx.fillRect(69, 30, 12, 57);
+  }
+  ctx.fillStyle = fighter.skin;
+  ctx.beginPath();
+  ctx.moveTo(24, 30);
+  ctx.lineTo(72, 30);
+  ctx.lineTo(70, 65);
+  ctx.lineTo(61, 78);
+  ctx.lineTo(35, 78);
+  ctx.lineTo(26, 65);
+  ctx.fill();
+  ctx.fillRect(19, 48, 7, 13);
+  ctx.fillRect(70, 48, 7, 13);
+  ctx.fillStyle = fighter.hair;
+  ctx.fillRect(22, 18, 52, 14);
+  ctx.fillRect(23, 28, fighter.id === "meloni" ? 29 : 18, 5);
+  if (fighter.slickHair) ctx.fillRect(30, 12, 38, 9);
+  const faceTexture = pixelTexture(fighter, "face");
+  ctx.drawImage(faceTexture.image, 26, 34, 44, 37);
+  faceTexture.dispose();
+  if (fighter.beard) {
+    ctx.fillStyle = fighter.hair;
+    ctx.fillRect(26, 64, 8, 8);
+    ctx.fillRect(62, 64, 8, 8);
+    ctx.fillRect(34, 73, 28, 5);
+  }
+  if (fighter.glasses) {
+    ctx.strokeStyle = "#201e25";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(30, 44, 13, 9);
+    ctx.strokeRect(53, 44, 13, 9);
+    ctx.fillStyle = "#201e25";
+    ctx.fillRect(43, 48, 10, 2);
+  }
+}
+
+function showLadder() {
+  matchActive = false;
+  victory = null;
+  clearTimeout(ladderTimeout);
+  setStageMood(tournament.currentStage);
+  document.querySelector("#hud").classList.remove("active");
+  continueScreen.classList.add("hidden");
+  ladderScreen.classList.remove("hidden");
+  document.querySelector("#ladder-title").textContent = tournament.currentStage === 7 ? "FINAL BOSS: PALAZZO CHIGI" : `STAGE ${tournament.currentStage + 1}`;
+  document.querySelector("#ladder-summary").textContent = `Score ${tournament.totalScore} · Win streak ${tournament.winStreak} · Best of 3`;
+  const list = document.querySelector("#ladder-list");
+  list.replaceChildren();
+  for (let index = tournament.ladder.length - 1; index >= 0; index -= 1) {
+    const item = document.createElement("li");
+    const locked = index > tournament.currentStage;
+    const silhouette = document.createElement("span");
+    silhouette.className = "ladder-silhouette";
+    silhouette.setAttribute("aria-hidden", "true");
+    item.appendChild(silhouette);
+    const label = document.createElement("span");
+    label.className = "ladder-stage-name";
+    const stage = index === 7 ? "FINAL BOSS: PALAZZO CHIGI" : `STAGE ${index + 1}`;
+    label.textContent = `${stage} · ${locked ? "???" : fightersById.get(tournament.ladder[index]).name}`;
+    item.appendChild(label);
+    if (index === tournament.currentStage) item.className = "current";
+    else if (locked) item.className = "locked";
+    else {
+      item.className = "completed";
+      const stamp = document.createElement("span");
+      stamp.className = "ladder-stamp";
+      stamp.textContent = "ELETTO / DEFEATED";
+      item.appendChild(stamp);
+    }
+    list.appendChild(item);
+  }
+  const chosen = fightersById.get(tournament.playerId);
+  const rival = fightersById.get(tournament.opponentId);
+  document.querySelector("#ladder-player-name").textContent = chosen.name;
+  document.querySelector("#ladder-opponent-name").textContent = rival.name;
+  drawLadderPortrait(document.querySelector("#ladder-player-portrait"), chosen);
+  drawLadderPortrait(document.querySelector("#ladder-opponent-portrait"), rival);
+  document.querySelector("#next-stage-button").focus();
+  ladderTimeout = setTimeout(startRound, 3000);
+}
+
+function clearProjectiles() {
+  for (let i = ballots.length - 1; i >= 0; i -= 1) {
+    if (!ballots[i].projectile) continue;
+    const ballot = ballots[i];
+    scene.remove(ballot.mesh);
+    ballot.mesh.traverse((part) => {
+      if (!part.isMesh) return;
+      part.geometry.dispose();
+      part.material.dispose();
+    });
+    ballots.splice(i, 1);
+  }
+}
+
+function startRound() {
+  if (!tournament || matchActive) return;
+  clearTimeout(ladderTimeout);
+  ladderTimeout = null;
+  clearProjectiles();
+  keys.clear();
+  lastTap.w = lastTap.s = lastTap.ArrowUp = lastTap.ArrowDown = 0;
   sound.confirm();
   sound.startMatch();
   if (fightersInMatch.length) {
     fightersInMatch.forEach(disposeFighter);
     fightersInMatch.length = 0;
   }
-  const choices = fighters.filter((fighter) => fighter.id !== selectedId);
-  const rival = choices[Math.floor(Math.random() * choices.length)];
-  player = createCombatant(fightersById.get(selectedId), -2.7, 0.25, 1, true);
-  opponent = createCombatant(rival, 2.7, -0.15, -1, false);
+  const difficulty = difficultyForStage(tournament.currentStage);
+  player = createCombatant(fightersById.get(tournament.playerId), -2.7, 0.25, 1, true);
+  opponent = createCombatant(fightersById.get(tournament.opponentId), 2.7, -0.15, -1, false);
+  updateComboBadge(player);
+  updateComboBadge(opponent);
+  opponent.health = opponent.maxHealth = difficulty.health;
+  opponent.difficulty = difficulty;
+  if (tournament.currentStage === 7) {
+    const aura = new THREE.Mesh(
+      new THREE.SphereGeometry(0.9, 8, 6),
+      new THREE.MeshBasicMaterial({ color: "#ffd353", transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending })
+    );
+    aura.name = "bossAura";
+    aura.scale.set(0.8, 1.65, 0.65);
+    aura.position.y = 1.25;
+    opponent.root.add(aura);
+  }
   fightersInMatch.push(player, opponent);
   elapsed = 60;
   matchOver = false;
@@ -726,10 +900,12 @@ function beginMatch() {
     trail.style.transition = "";
   }
   selectScreen.classList.add("hidden");
+  ladderScreen.classList.add("hidden");
+  continueScreen.classList.add("hidden");
   resultScreen.classList.add("hidden");
   document.querySelector("#hud").classList.add("active");
   document.querySelector("#player-name").textContent = player.definition.name;
-  document.querySelector("#opponent-name").textContent = opponent.definition.name;
+  document.querySelector("#opponent-name").textContent = `${opponent.definition.name}${tournament.currentStage === 7 ? " · BOSS" : ""}`;
   toast.textContent = `SIGNATURE: ${player.definition.special.toUpperCase()}  ·  PRESS L`;
   updateHealthDisplay();
   showAnnouncer();
@@ -739,24 +915,36 @@ function beginMatch() {
 }
 
 function resetToSelect() {
+  clearTimeout(ladderTimeout);
+  ladderTimeout = null;
+  clearInterval(continueInterval);
+  continueInterval = null;
+  clearProjectiles();
+  keys.clear();
   sound.stopMatch();
   matchActive = false;
   matchOver = false;
   victory = null;
   resultScreen.classList.add("hidden");
+  ladderScreen.classList.add("hidden");
+  continueScreen.classList.add("hidden");
   selectScreen.classList.remove("hidden");
   document.querySelector("#hud").classList.remove("active");
   fightersInMatch.forEach(disposeFighter);
   fightersInMatch.length = 0;
   player = null;
   opponent = null;
+  document.querySelector("#player-combo").classList.add("hidden");
+  document.querySelector("#cpu-combo").classList.add("hidden");
+  tournament = null;
+  setStageMood(0);
   buildRoster();
 }
 
 function updateHealthDisplay() {
   if (!player || !opponent) return;
-  const playerHealth = clamp(player.health, 0, 100);
-  const opponentHealth = clamp(opponent.health, 0, 100);
+  const playerHealth = clamp(player.health / (player.maxHealth || 100) * 100, 0, 100);
+  const opponentHealth = clamp(opponent.health / (opponent.maxHealth || 100) * 100, 0, 100);
   playerHealthNode.style.width = `${playerHealth}%`;
   opponentHealthNode.style.width = `${opponentHealth}%`;
   playerTrailNode.style.width = `${playerHealth}%`;
@@ -764,6 +952,7 @@ function updateHealthDisplay() {
   document.querySelector("#player-percent").textContent = `${Math.ceil(playerHealth)}%`;
   document.querySelector("#opponent-percent").textContent = `${Math.ceil(opponentHealth)}%`;
   timerNode.textContent = `${Math.ceil(elapsed)}`;
+  document.querySelector("#round-status").textContent = `${tournament.roundLabel} · ${tournament.roundWins.player}–${tournament.roundWins.cpu}`;
 }
 
 function announceSpecial(combatant) {
@@ -806,6 +995,8 @@ function spawnBallot(x, y, z, direction, color = "#f4ecd8", scale = 1, propertie
     launch: properties.launch,
     unblockable: properties.unblockable,
     special: properties.special,
+    limb: properties.limb,
+    high: properties.high,
     owner: properties.owner,
     color
   });
@@ -909,13 +1100,15 @@ function attackDefinition(combatant, kind, extra = {}) {
 }
 
 function queueAttack(combatant, kind, extra = {}) {
-  if (!matchActive || combatant.health <= 0 || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return;
-  if (combatant.cooldown > 0 && combatant.attack) return;
+  if (!matchActive || combatant.health <= 0 || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return false;
+  if (combatant.cooldown > 0) return false;
   const attack = attackDefinition(combatant, kind, extra);
+  attack.damage *= combatant.difficulty?.damage || 1;
   combatant.attack = { ...attack, age: 0, hit: false };
   combatant.cooldown = attack.duration + 0.04;
   combatant.blocking = false;
   sound.swing(attack.limb === "leftKick" || attack.limb === "rightKick");
+  return true;
 }
 
 function getSpecial(combatant) {
@@ -935,7 +1128,7 @@ function getSpecial(combatant) {
 }
 
 function useSpecial(combatant) {
-  if (!matchActive || combatant.cooldown > 0 || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return;
+  if (!matchActive || combatant.cooldown > 0 || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return false;
   const special = getSpecial(combatant);
   if (special.guard) combatant.blockTimer = 0.52;
   if (special.kind === "rush") {
@@ -947,27 +1140,74 @@ function useSpecial(combatant) {
   if (!special.projectile) {
     spawnBurst(combatant, special.color, 16);
   }
+  return true;
 }
 
 function playerAttack(key) {
   if (!player || !matchActive || player.stun > 0 || player.airborne || player.landingTime > 0) return;
-  if (key === "i" && keys.has("s")) {
-    queueAttack(player, "launcher", { damage: 10, range: 1.38, windup: 0.17, duration: 0.42, launch: true, limb: "rightPunch" });
-    return;
+  bufferInput(player.input, key === "i" && keys.has("s") ? "launcher" : key);
+  consumeBufferedAttack(player);
+}
+
+function consumeBufferedAttack(combatant) {
+  const state = combatant.input;
+  if (!state || !state.queue.length || !matchActive || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return;
+  const current = combatant.attack;
+  if (current && (current.special || current.age < Math.max(current.windup + 0.025, current.duration * 0.4))) return;
+  if (!current && combatant.cooldown > 0) return;
+  const { key } = state.queue.shift();
+  const { code, cross, snap, heavy } = resolveComboInput(state, key);
+  if (current) {
+    combatant.attack = null;
+    combatant.cooldown = 0;
   }
-  if (key === "u") {
-    if (player.comboWindow > 0) player.comboCount += 1;
-    else player.comboCount = 1;
-    player.comboWindow = 0.72;
-    queueAttack(player, "punch", { limb: "leftPunch" });
-  } else if (key === "i") {
-    if (player.comboCount >= 2 && player.comboWindow > 0) {
-      queueAttack(player, "combo-finisher", { damage: 12, range: 1.5, launch: true, duration: 0.4, limb: "rightPunch" });
-    } else queueAttack(player, "punch", { damage: 8, range: 1.18, limb: "rightPunch" });
-    player.comboCount = 0;
-    player.comboWindow = 0;
+  if (key === "l") {
+    useSpecial(combatant);
+  } else if (key === "launcher") {
+    queueAttack(combatant, "launcher", { damage: 10, range: 1.38, windup: 0.17, duration: 0.42, launch: true, limb: "rightPunch" });
+  } else if (code === "u-u-i") {
+    queueAttack(combatant, "combo-finisher", { damage: 14, range: 1.5, knockdown: true, duration: 0.4, limb: "rightPunch", comboMove: "straight" });
+  } else if (code === "u-i-k" || code === "j-k-k") {
+    queueAttack(combatant, "kick", { damage: 13, range: 1.55, knockdown: true, duration: 0.46, limb: "rightKick", comboMove: code === "u-i-k" ? "roundhouse" : "heel" });
+  } else if (key === "u" || key === "i") {
+    queueAttack(combatant, "punch", { ...(key === "i" ? { damage: heavy ? 10 : 8, range: 1.18 } : {}), limb: key === "i" || cross ? "rightPunch" : "leftPunch" });
+  } else {
+    queueAttack(combatant, "kick", { damage: snap ? 10 : 8, range: 1.4, low: !snap, limb: key === "j" ? "leftKick" : "rightKick" });
   }
-  else if (key === "j" || key === "k") queueAttack(player, "kick", { damage: 8, range: 1.4, low: true, limb: key === "j" ? "leftKick" : "rightKick" });
+}
+
+function recordCombatHit(attacker, target, damage, attack, blocked = false) {
+  const actualDamage = Math.min(target.health, damage);
+  target.health = Math.max(0, target.health - damage);
+  if (!blocked) {
+    if (target.input) {
+      clearComboInput(target.input);
+      target.attack = null;
+      target.cooldown = 0;
+    }
+    if (!target.hitCombo || target.hitCombo.attacker !== attacker) {
+      target.hitCombo = { attacker, hits: 0, damage: 0 };
+    }
+    target.hitCombo.hits += 1;
+    target.hitCombo.damage += actualDamage;
+    if (target.airborne && target.juggle && target.juggle.hits < 4 &&
+        ["leftPunch", "rightPunch", "leftKick", "rightKick"].includes(attack.limb) && !attack.special) {
+      target.juggle.hits += 1;
+      target.vy = Math.max(target.vy, 1.6);
+    }
+  }
+  updateComboBadge(target);
+}
+
+function updateComboBadge(target) {
+  const badge = document.querySelector(target.isPlayer ? "#cpu-combo" : "#player-combo");
+  if (target.hitCombo && target.hitCombo.hits >= 2) {
+    badge.textContent = `${target.hitCombo.hits} HIT COMBO! ${Math.round(target.hitCombo.damage)} DAMAGE!`;
+    badge.classList.remove("hidden");
+  } else {
+    badge.classList.add("hidden");
+    badge.textContent = "";
+  }
 }
 
 function tryHit(attacker, target) {
@@ -988,35 +1228,38 @@ function tryHit(attacker, target) {
   }
   const dx = Math.abs(attacker.x - target.x);
   const dz = Math.abs(attacker.z - target.z);
-  const targetAirborne = target.y > 0.35;
-  if (dx > attack.range || dz > 0.95 || (targetAirborne && !attack.launch && attack.kind !== "kick" && attack.kind !== "spin" && attack.kind !== "eco-spin")) return;
+  const targetAirborne = target.airborne;
+  if (dx > attack.range || dz > 0.95 || (targetAirborne && target.y > 2.2)) return;
   if (target.dodgeTimer > 0) {
     spawnCallout("SCHIVATA!", target.x, target.y + 2.4, target.z);
     return;
   }
 
+  attack.connected = true;
   let damage = attack.damage;
-  if (target.blocking && attack.high && !attack.unblockable) damage *= 0.18;
-  target.health = Math.max(0, target.health - damage);
-  target.stun = target.blocking ? 0.12 : 0.25;
-  target.reactionTime = target.blocking ? 0.12 : 0.3;
-  target.vx = attacker.facing * (attack.knockdown ? 4.4 : 2.2);
+  const blocked = target.blocking && !targetAirborne && attack.high && !attack.unblockable;
+  if (blocked) damage *= 0.18;
+  recordCombatHit(attacker, target, damage, attack, blocked);
+  target.stun = blocked ? 0.12 : 0.25;
+  target.reactionTime = blocked ? 0.12 : 0.3;
+  target.vx = attacker.facing * (attack.knockdown ? 4.4 : attack.launch ? 0.8 : targetAirborne ? 0.15 : 2.2);
   if (attack.launch && !targetAirborne) {
     target.vy = 5.1;
     target.airborne = true;
+    target.juggle = { hits: 0 };
     target.landingTime = 0;
-  } else if (attack.knockdown) {
+  } else if (attack.knockdown && !targetAirborne) {
     target.vy = 2.2;
     target.airborne = true;
     target.landingTime = 0;
   }
-  attacker.vx = -attacker.facing * 0.22;
+  attacker.vx = targetAirborne ? 0 : -attacker.facing * 0.22;
   hitStop = Math.max(hitStop, 0.06);
   shake = Math.max(shake, attack.knockdown ? 0.38 : 0.22);
   if (attack.launch || attack.knockdown || attack.kind === "heavy") {
     cameraTilt = attacker.facing * (attack.launch ? 0.045 : 0.03);
   }
-  spawnCallout(target.blocking ? "BLOCCATO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.65, target.z);
+  spawnCallout(blocked ? "BLOCCATO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.65, target.z);
   spawnImpact(contactPoint(attacker, target, attack), {
     launch: attack.launch,
     special: attack.special,
@@ -1024,7 +1267,7 @@ function tryHit(attacker, target) {
   });
   updateHealthDisplay();
   if (target.health <= 0) finishMatch(attacker);
-  else sound.impact({ blocked: target.blocking && attack.high && !attack.unblockable, launch: attack.launch });
+  else sound.impact({ blocked, launch: attack.launch });
 }
 
 function finishMatch(winner, reason = "knockout") {
@@ -1032,16 +1275,53 @@ function finishMatch(winner, reason = "knockout") {
   matchOver = true;
   matchActive = false;
   sound.stopMatch();
-  if (reason === "knockout") {
-    sound.knockout();
-    const loser = winner === player ? opponent : player;
-    winner.attack = null;
-    loser.attack = null;
-    victory = { winner, loser, time: 0 };
+  if (reason === "knockout") sound.knockout();
+  const loser = winner === player ? opponent : player;
+  winner.attack = null;
+  loser.attack = null;
+  const outcome = tournament.recordRound(winner === player ? "player" : "cpu", winner.health);
+  updateHealthDisplay();
+  victory = { winner, loser, time: 0, outcome, totalTime: performance.now() - tournamentStartedAt };
+}
+
+function showContinue() {
+  continueScreen.classList.remove("hidden");
+  continueDeadline = Date.now() + 9000;
+  const tick = () => {
+    const remaining = Math.max(0, Math.ceil((continueDeadline - Date.now()) / 1000));
+    document.querySelector("#continue-count").textContent = remaining;
+    if (remaining === 0) resetToSelect();
+  };
+  tick();
+  continueInterval = setInterval(tick, 100);
+  document.querySelector("#continue-button").focus();
+}
+
+function retryStage() {
+  if (continueScreen.classList.contains("hidden")) return;
+  if (Date.now() >= continueDeadline) {
+    resetToSelect();
+    return;
   }
-  document.querySelector("#result-title").textContent = winner.isPlayer ? "FIDUCIA!" : "VETO!";
-  document.querySelector("#result-copy").textContent = `${winner.definition.name} wins the chamber vote. The session is adjourned.`;
-  if (reason !== "knockout") resultScreen.classList.remove("hidden");
+  clearInterval(continueInterval);
+  continueInterval = null;
+  tournament.retry();
+  showLadder();
+}
+
+function finishRoundTransition(outcome) {
+  if (outcome !== "champion") victory = null;
+  if (outcome === "round") startRound();
+  else if (outcome === "stage") showLadder();
+  else if (outcome === "continue") showContinue();
+  else {
+    victory.champion = true;
+    document.querySelector("#hud").classList.remove("active");
+    document.querySelector("#result-title").textContent = "NUOVO PREMIER!";
+    document.querySelector("#result-copy").textContent = `${player.definition.name} · FINAL SCORE ${tournament.totalScore} · TOTAL TIME ${formatTournamentTime(victory.totalTime)}`;
+    resultScreen.classList.remove("hidden");
+    document.querySelector("#rematch-button").focus();
+  }
 }
 
 function setAIState(state, duration = random(0.25, 0.65)) {
@@ -1054,6 +1334,7 @@ function setAIState(state, duration = random(0.25, 0.65)) {
 function updateAI(dt) {
   if (!opponent || !player || opponent.health <= 0 || player.health <= 0) return;
   const ai = opponent;
+  const difficulty = ai.difficulty;
   if (ai.airborne || ai.landingTime > 0) return;
   const dx = player.x - ai.x;
   const dz = player.z - ai.z;
@@ -1062,17 +1343,30 @@ function updateAI(dt) {
   ai.root.scale.x = ai.facing;
   ai.aiTimer -= dt;
 
-  if (player.attack && player.attack.age < player.attack.windup && ai.aiState !== "SIDESTEP") {
-    if (Math.random() < 0.035 && distance < 2.4) {
-      ai.dodgeTimer = 0.42;
-      ai.aiSide = Math.random() < 0.5 ? -1 : 1;
-      setAIState("SIDESTEP", 0.35);
-    } else if (player.attack.high && Math.random() < 0.12) {
-      ai.blockTimer = 0.45;
+  if (player.attack && ai.observedAttack !== player.attack) {
+    ai.observedAttack = player.attack;
+    ai.reactionTimer = difficulty.reaction;
+    ai.defense = player.attack.high && Math.random() < difficulty.block ? "block" :
+      (Math.random() < difficulty.sidestep ? "sidestep" : "none");
+  }
+  if (player.attack && ai.defense && ai.defense !== "none") {
+    ai.reactionTimer -= dt;
+    if (ai.reactionTimer <= 0) {
+      if (ai.defense === "sidestep" && distance < 2.4 && !player.attack.special) {
+        ai.dodgeTimer = 0.42;
+        setAIState("SIDESTEP", 0.35);
+      } else if (ai.defense === "block" && player.attack.high) ai.blockTimer = 0.45;
+      ai.defense = "none";
     }
   }
 
-  if (player.y > 0.4 && distance < 3.2) {
+  if (difficulty.speed > 1 && player.attack?.hit && !player.attack.connected &&
+      distance < 1.8 && ai.cooldown <= 0 && ai.stun <= 0 && ai.aiState !== "SIDESTEP") {
+    ai.aiCombo = 0;
+    setAIState("ATTACK", difficulty.combo * 0.48);
+  }
+
+  if (difficulty.combo > 1 && player.y > 0.4 && distance < 3.2) {
     if (ai.aiState !== "JUGGLE_FOLLOWUP") setAIState("JUGGLE_FOLLOWUP", 0.42);
   } else if (ai.aiState === "JUGGLE_FOLLOWUP" && ai.aiTimer <= 0) {
     setAIState("IDLE", 0.4);
@@ -1080,17 +1374,23 @@ function updateAI(dt) {
 
   switch (ai.aiState) {
     case "IDLE":
-      if (distance > 2.1) setAIState("APPROACH", 0.8);
-      else if (distance < 1.25 && Math.random() < 0.012) setAIState("SIDESTEP", 0.32);
-      else if (ai.aiTimer <= 0 && ai.cooldown <= 0) setAIState("ATTACK", 0.6);
+      if (distance > (difficulty.speed > 1 ? 1.65 : 2.1)) setAIState("APPROACH", 0.8);
+      else if (distance < 1.25 && Math.random() < difficulty.sidestep * dt * 0.5) setAIState("SIDESTEP", 0.32);
+      else if (ai.aiTimer <= 0 && ai.cooldown <= 0) setAIState("ATTACK", difficulty.combo * 0.48 + difficulty.reaction);
       break;
     case "APPROACH":
-      ai.vx = ai.facing * ai.definition.stats.speed * 0.18;
-      if (distance < 1.75) setAIState("ATTACK", 0.62);
+      ai.vx = ai.facing * ai.definition.stats.speed * 0.18 * difficulty.speed;
+      if (distance < 1.75) setAIState("ATTACK", difficulty.combo * 0.48 + difficulty.reaction);
       break;
     case "ATTACK":
-      if (ai.aiCombo < 2 && ai.cooldown <= 0) {
-        queueAttack(ai, ai.aiCombo === 0 ? "punch" : "kick", { damage: ai.aiCombo ? 8 : 6, range: 1.45, limb: ai.aiCombo === 0 ? "leftPunch" : "rightKick" });
+      if (ai.aiCombo < difficulty.combo && ai.cooldown <= 0 && ai.stun <= 0) {
+        const missed = player.attack && player.attack.hit && !player.attack.connected && distance < 1.8;
+        if (difficulty.special && Math.random() < difficulty.special && (missed || ai.aiCombo > 0)) useSpecial(ai);
+        else if (difficulty.launcher && Math.random() < difficulty.launcher && (missed || ai.aiCombo > 0)) {
+          queueAttack(ai, "launcher", { damage: 10, range: 1.38, windup: 0.17, duration: 0.42, launch: true, limb: "rightPunch" });
+        } else {
+          queueAttack(ai, ai.aiCombo % 2 === 0 ? "punch" : "kick", { damage: ai.aiCombo % 2 ? 8 : 6, range: 1.45, limb: ai.aiCombo % 2 === 0 ? "leftPunch" : "rightKick" });
+        }
         ai.aiCombo += 1;
       }
       if (ai.aiTimer <= 0) {
@@ -1104,7 +1404,7 @@ function updateAI(dt) {
       if (ai.aiTimer <= 0) setAIState("APPROACH", 0.55);
       break;
     case "JUGGLE_FOLLOWUP":
-      if (distance > 1.2) ai.vx = ai.facing * ai.definition.stats.speed * 0.2;
+      if (distance > 1.2) ai.vx = ai.facing * ai.definition.stats.speed * 0.2 * difficulty.speed;
       if (distance < 1.8 && ai.cooldown <= 0 && player.y > 0.25) {
         queueAttack(ai, "kick", { damage: 6, range: 1.9, windup: 0.1, limb: "rightKick" });
       }
@@ -1303,6 +1603,18 @@ function poseFighter(combatant, dt, opponentBody = null) {
       combatant.model.position.y += rise * 0.25 - crouch * 0.15;
     }
 
+    if (attack.comboMove === "straight") {
+      joints.torso.rotation.z -= strike * 0.2;
+      combatant.model.position.x += strike * 0.18;
+    } else if (attack.comboMove === "roundhouse") {
+      combatant.root.rotation.y = sampleKeyframes(progress, [[0, 0], [impact, Math.PI], [1, Math.PI * 2]]);
+      joints.rightHip.rotation.z = THREE.MathUtils.lerp(joints.rightHip.rotation.z, 1.95, strike);
+    } else if (attack.comboMove === "heel") {
+      combatant.model.position.y += Math.sin(progress * Math.PI) * 0.3;
+      joints.rightHip.rotation.z = THREE.MathUtils.lerp(joints.rightHip.rotation.z, 2.4, strike);
+      joints.torso.rotation.z -= strike * 0.2;
+    }
+
     if (attack.special) {
       if (definition.id === "renzi" || definition.id === "bonelli") {
         combatant.root.rotation.y = sampleKeyframes(progress, [
@@ -1408,7 +1720,10 @@ function poseFighter(combatant, dt, opponentBody = null) {
 function updateCombatant(combatant, dt, opponentBody) {
   if (!combatant) return;
   combatant.cooldown = Math.max(0, combatant.cooldown - dt);
-  combatant.comboWindow = Math.max(0, combatant.comboWindow - dt);
+  if (combatant.input) {
+    advanceInputClock(combatant.input, dt);
+    if (combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) clearComboInput(combatant.input);
+  }
   combatant.stun = Math.max(0, combatant.stun - dt);
   combatant.reactionTime = Math.max(0, combatant.reactionTime - dt);
   combatant.dodgeTimer = Math.max(0, combatant.dodgeTimer - dt);
@@ -1419,15 +1734,22 @@ function updateCombatant(combatant, dt, opponentBody) {
   if (combatant.attack) {
     combatant.attack.age += dt;
     tryHit(combatant, opponentBody);
-    if (combatant.attack && combatant.attack.age > combatant.attack.duration) combatant.attack = null;
+    if (combatant.attack && combatant.attack.age > combatant.attack.duration) {
+      combatant.attack = null;
+      if (combatant.input) endComboAttack(combatant.input);
+    }
   }
 
-  combatant.vy -= 13.5 * dt;
+  if (combatant.isPlayer && combatant.input) consumeBufferedAttack(combatant);
+  const aura = combatant.root.getObjectByName("bossAura");
+  if (aura) aura.material.opacity = 0.1 + (Math.sin(combatant.animationTime * 5) + 1) * 0.035;
+  combatant.vy -= (combatant.airborne && combatant.juggle?.hits ? 10.5 : 13.5) * dt;
   combatant.y += combatant.vy * dt;
   if (combatant.y < 0) {
     combatant.y = 0;
     if (combatant.airborne) {
       combatant.airborne = false;
+      combatant.juggle = null;
       combatant.airRotation = Math.atan2(Math.sin(combatant.airRotation), Math.cos(combatant.airRotation));
       combatant.landingTime = 0.55;
       combatant.stun = Math.max(combatant.stun, 0.55);
@@ -1445,6 +1767,10 @@ function updateCombatant(combatant, dt, opponentBody) {
     combatant.airRotation = Math.atan2(Math.sin(combatant.airRotation), Math.cos(combatant.airRotation));
   } else {
     combatant.airRotation *= Math.exp(-12 * dt);
+  }
+  if (combatant.hitCombo && !combatant.airborne && combatant.landingTime <= 0 && combatant.stun <= 0) {
+    combatant.hitCombo = null;
+    updateComboBadge(combatant);
   }
   combatant.x += combatant.vx * dt;
   combatant.z += combatant.vz * dt;
@@ -1503,13 +1829,14 @@ function checkSingleProjectile(ballot) {
       target.dodgeTimer <= 0) {
     ballot.hit = true;
     ballot.life = 0;
-    target.health = Math.max(0, target.health - (ballot.damage || 14));
+    recordCombatHit(source, target, ballot.damage ?? 14, ballot);
     target.stun = 0.22;
     target.reactionTime = 0.3;
     target.vx = Math.sign(ballot.vx) * 2.1;
-    if (ballot.launch) {
+    if (ballot.launch && !target.airborne) {
       target.vy = 4.6;
       target.airborne = true;
+      target.juggle = { hits: 0 };
       target.landingTime = 0;
     }
     spawnCallout(ballot.unblockable ? "VETO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.5, target.z);
@@ -1571,7 +1898,7 @@ function checkTimer(dt) {
   elapsed = Math.max(0, elapsed - dt);
   timerNode.textContent = `${Math.ceil(elapsed)}`;
   if (elapsed === 0) {
-    const winner = player.health >= opponent.health ? player : opponent;
+    const winner = player.health / 100 >= opponent.health / (opponent.maxHealth || 100) ? player : opponent;
     finishMatch(winner, "timeout");
   }
 }
@@ -1624,7 +1951,7 @@ function updateVictory(dt) {
     joint.rotation.x = THREE.MathUtils.lerp(joint.rotation.x, 0, settle);
     joint.rotation.z = THREE.MathUtils.lerp(joint.rotation.z, 0, settle);
   }
-  if (victory.time >= 1.8) resultScreen.classList.remove("hidden");
+  if (victory.time >= 1.8 && !victory.champion) finishRoundTransition(victory.outcome);
 }
 
 function update(dt) {
@@ -1633,7 +1960,7 @@ function update(dt) {
     movePlayer(dt);
     updateAI(dt);
     updateCombatant(player, dt, opponent);
-    if (hitStop <= 0) updateCombatant(opponent, dt, player);
+    if (matchActive && hitStop <= 0) updateCombatant(opponent, dt, player);
     checkTimer(dt);
   } else if (victory) {
     updateVictory(dt);
@@ -1667,7 +1994,10 @@ function updateCamera(dt) {
       (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
     distance = clamp(Math.max(8.7 + span * 0.65, horizontalFit + 2.5), 9.5, 48);
   }
-  if (!desired) desired = new THREE.Vector3(focus.x, focus.y + distance * 0.3, focus.z + distance);
+  if (!desired) {
+    const lateStage = tournament && tournament.currentStage >= 6;
+    desired = new THREE.Vector3(focus.x + (lateStage ? 0.5 : 0), focus.y + distance * (lateStage ? 0.22 : 0.3), focus.z + distance);
+  }
   const smoothing = 1 - Math.exp(-3.5 * dt);
   cameraRig.lerp(desired, smoothing);
   cameraTarget.lerp(focus, smoothing);
@@ -1677,7 +2007,7 @@ function updateCamera(dt) {
     camera.position.y += random(-shake * 0.4, shake * 0.4);
   }
   camera.lookAt(cameraTarget);
-  camera.rotateZ(cameraTilt);
+  camera.rotateZ(cameraTilt + (matchActive && tournament.currentStage >= 6 ? 0.025 : 0));
   shake = Math.max(0, shake - dt * 1.8);
   cameraTilt *= Math.exp(-6 * dt);
 }
@@ -1710,6 +2040,20 @@ window.addEventListener("keydown", (event) => {
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(event.key)) event.preventDefault();
 
   if (!matchActive) {
+    if (!continueScreen.classList.contains("hidden")) {
+      if (key === "enter" || key === " ") {
+        event.preventDefault();
+        retryStage();
+      } else if (key === "escape") resetToSelect();
+      return;
+    }
+    if (!ladderScreen.classList.contains("hidden")) {
+      if (key === "enter" || key === " ") {
+        event.preventDefault();
+        startRound();
+      }
+      return;
+    }
     if (!selectScreen.classList.contains("hidden")) {
       if (key.startsWith("Arrow")) navigateRoster(key);
       if (key === "enter" && selectedId) {
@@ -1717,7 +2061,7 @@ window.addEventListener("keydown", (event) => {
         beginMatch();
       }
     }
-    if (matchOver && (key === "enter" || key === " ")) {
+    if (!resultScreen.classList.contains("hidden") && (key === "enter" || key === " ")) {
       event.preventDefault();
       resetToSelect();
     }
@@ -1737,8 +2081,7 @@ window.addEventListener("keydown", (event) => {
       lastTap[previousKey] = 0;
     } else lastTap[previousKey] = currentTime;
   }
-  if (["u", "i", "j", "k"].includes(key)) playerAttack(key);
-  if (key === "l") useSpecial(player);
+  if (["u", "i", "j", "k", "l"].includes(key) && !event.repeat) playerAttack(key);
 });
 
 window.addEventListener("keyup", (event) => {
@@ -1748,6 +2091,9 @@ window.addEventListener("keyup", (event) => {
 window.addEventListener("blur", () => keys.clear());
 
 startButton.addEventListener("click", beginMatch);
+document.querySelector("#next-stage-button").addEventListener("click", startRound);
+document.querySelector("#continue-button").addEventListener("click", retryStage);
+document.querySelector("#quit-button").addEventListener("click", resetToSelect);
 document.querySelector("#rematch-button").addEventListener("click", resetToSelect);
 
 if (!sound.available) {

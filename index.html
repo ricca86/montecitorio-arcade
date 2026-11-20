@@ -36,7 +36,7 @@
             <div class="health-caption"><span>CONSENSO</span><span id="player-percent">100%</span></div>
           </div>
           <div class="round-clock">
-            <span class="clock-label">CONSENSO</span>
+            <span class="clock-label" id="round-status">ROUND 1 · 0–0</span>
             <strong id="timer">60</strong>
           </div>
           <div class="combatant combatant-right">
@@ -45,6 +45,8 @@
             <div class="health-caption"><span>APPROVAZIONE</span><span id="opponent-percent">100%</span></div>
           </div>
         </div>
+        <div id="player-combo" class="combo-badge combo-left hidden" aria-live="polite"></div>
+        <div id="cpu-combo" class="combo-badge combo-right hidden" aria-live="polite"></div>
         <div id="announcer" class="announcer" aria-live="assertive">
           <span>ROUND 1</span>
           <strong>ELEZIONI!</strong>
@@ -58,7 +60,7 @@
               <span class="select-count">01 / 08</span>
             </div>
             <h2>Select your <em>fighter</em></h2>
-            <p class="select-intro">The chamber is in session. Pick a fighter; the opposition will be drawn at random.</p>
+            <p class="select-intro">ELEZIONI 2027 ARCADE LADDER · Seven rivals and a final boss await.</p>
             <div id="roster" class="roster" role="listbox" aria-label="Select a fighter"></div>
             <div class="select-footer">
               <div id="fighter-detail" class="fighter-detail">
@@ -72,12 +74,45 @@
           </div>
         </section>
 
+        <section id="ladder-screen" class="tournament-screen hidden" aria-label="Tournament ladder">
+          <div class="ladder-panel">
+            <header class="ladder-header">
+              <span class="eyebrow">Elezioni 2027 arcade ladder</span>
+              <strong>THE ROAD TO PALAZZO CHIGI</strong>
+            </header>
+            <ol id="ladder-list" class="ladder-list"></ol>
+            <div class="challenger-panel">
+              <span class="challenger-flash">NEXT CHALLENGER</span>
+              <h2 id="ladder-title">STAGE 1</h2>
+              <div class="versus-portraits">
+                <figure><canvas id="ladder-player-portrait" width="96" height="112" aria-hidden="true"></canvas><figcaption id="ladder-player-name"></figcaption></figure>
+                <strong class="versus-mark">VS</strong>
+                <figure><canvas id="ladder-opponent-portrait" width="96" height="112" aria-hidden="true"></canvas><figcaption id="ladder-opponent-name"></figcaption></figure>
+              </div>
+              <p id="ladder-summary"></p>
+              <button id="next-stage-button" class="primary-button">Fight now <span aria-hidden="true">↗</span></button>
+              <p class="ladder-hint">AUTO-ADVANCE IN 3 SECONDS · ENTER / SPACE</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="continue-screen" class="tournament-screen hidden" aria-label="Continue tournament">
+          <div class="tournament-panel continue-panel">
+            <span class="eyebrow">The chamber has spoken</span>
+            <h2>CONTINUE? <span id="continue-count">9</span></h2>
+            <p>Retry this stage with your score reset, or return to character select.</p>
+            <button id="continue-button" class="primary-button">Continue</button>
+            <button id="quit-button" class="primary-button">Return to select</button>
+          </div>
+        </section>
+
         <section id="result-screen" class="result-screen hidden">
           <div class="result-card">
-            <span class="eyebrow">The chamber has decided</span>
-            <h2 id="result-title">Victory!</h2>
+            <span class="eyebrow">Elezioni 2027 arcade champion</span>
+            <h2 id="result-title">NUOVO PREMIER!</h2>
+            <strong class="champion-subtitle">LANDSLIDE VICTORY!</strong>
             <p id="result-copy"></p>
-            <button id="rematch-button" class="primary-button">Return to the ballot <span aria-hidden="true">↗</span></button>
+            <button id="rematch-button" class="primary-button">Play again <span aria-hidden="true">↗</span></button>
           </div>
         </section>
 
