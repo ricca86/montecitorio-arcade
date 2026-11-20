@@ -11,11 +11,13 @@ const toast = document.querySelector("#signature-toast");
 const startButton = document.querySelector("#start-button");
 const playerHealthNode = document.querySelector("#player-health");
 const opponentHealthNode = document.querySelector("#opponent-health");
+const playerTrailNode = document.querySelector("#player-trail");
+const opponentTrailNode = document.querySelector("#opponent-trail");
 const timerNode = document.querySelector("#timer");
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color("#33243b");
-scene.fog = new THREE.Fog("#33243b", 18, 38);
+scene.fog = new THREE.FogExp2("#33243b", 0.025);
 
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 80);
 camera.position.set(0, 7.4, 17.4);
@@ -30,14 +32,17 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 mount.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight("#ffedcf", "#382741", 2.1));
-const keyLight = new THREE.DirectionalLight("#fff1d2", 3.2);
-keyLight.position.set(-5, 11, 8);
+scene.add(new THREE.HemisphereLight("#b5a5bf", "#1a1424", 0.7));
+const keyLight = new THREE.SpotLight("#ffe1a0", 190, 32, Math.PI / 3.3, 0.32, 2);
+keyLight.position.set(-2, 11, 3);
+keyLight.target.position.set(0, 0, -0.5);
 keyLight.castShadow = true;
-keyLight.shadow.mapSize.set(1024, 1024);
-scene.add(keyLight);
-const rimLight = new THREE.PointLight("#a9c5ff", 44, 24);
-rimLight.position.set(0, 6, -6);
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.bias = -0.0003;
+keyLight.shadow.normalBias = 0.025;
+scene.add(keyLight, keyLight.target);
+const rimLight = new THREE.DirectionalLight("#788fce", 1.1);
+rimLight.position.set(2, 5, -6);
 scene.add(rimLight);
 
 const clock = new THREE.Clock();
@@ -47,7 +52,12 @@ const lastTap = { w: 0, s: 0, ArrowUp: 0, ArrowDown: 0 };
 const fightersInMatch = [];
 const ballots = [];
 const particles = [];
+const impactEffects = [];
 const comicWords = ["RIBALTONE!", "VETO!", "FIDUCIA!", "QUORUM!"];
+const cameraRig = new THREE.Vector3(0, 7.4, 17.4);
+const cameraTarget = new THREE.Vector3(0, 1.5, -0.5);
+const sparkGeometry = new THREE.OctahedronGeometry(0.07, 0);
+const ringGeometry = new THREE.RingGeometry(0.68, 0.82, 16);
 
 let selectedId = null;
 let player = null;
@@ -57,6 +67,7 @@ let matchOver = false;
 let elapsed = 60;
 let hitStop = 0;
 let shake = 0;
+let cameraTilt = 0;
 let toastTimer = 0;
 let bannerTimer = 0;
 let bannerPending = false;
@@ -77,7 +88,7 @@ window.addEventListener("resize", resize);
 resize();
 
 function material(color, roughness = 0.78, metalness = 0) {
-  return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  return new THREE.MeshStandardMaterial({ color, roughness, metalness, flatShading: true });
 }
 
 function addBox(parent, size, position, color, options = {}) {
@@ -130,7 +141,7 @@ function createArena() {
 
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(6.7, 0.045, 8, 72),
-    new THREE.MeshStandardMaterial({ color: "#eacb8b", metalness: 0.38, roughness: 0.35 })
+    material("#eacb8b", 0.35, 0.38)
   );
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.13;
@@ -198,11 +209,6 @@ function createArena() {
   ceiling.rotation.x = Math.PI;
   scene.add(ceiling);
 
-  for (let i = 0; i < 5; i += 1) {
-    const light = new THREE.PointLight("#ffd58b", 30, 12);
-    light.position.set(-7 + i * 3.5, 6, -2.5);
-    scene.add(light);
-  }
 }
 
 function addGlasses(group) {
@@ -436,6 +442,12 @@ function beginMatch() {
   matchOver = false;
   matchActive = true;
   hitStop = 0;
+  for (const trail of [playerTrailNode, opponentTrailNode]) {
+    trail.style.transition = "none";
+    trail.style.width = "100%";
+    void trail.offsetWidth;
+    trail.style.transition = "";
+  }
   selectScreen.classList.add("hidden");
   resultScreen.classList.add("hidden");
   document.querySelector("#hud").classList.add("active");
@@ -468,6 +480,8 @@ function updateHealthDisplay() {
   const opponentHealth = clamp(opponent.health, 0, 100);
   playerHealthNode.style.width = `${playerHealth}%`;
   opponentHealthNode.style.width = `${opponentHealth}%`;
+  playerTrailNode.style.width = `${playerHealth}%`;
+  opponentTrailNode.style.width = `${opponentHealth}%`;
   document.querySelector("#player-percent").textContent = `${Math.ceil(playerHealth)}%`;
   document.querySelector("#opponent-percent").textContent = `${Math.ceil(opponentHealth)}%`;
   timerNode.textContent = `${Math.ceil(elapsed)}`;
@@ -512,6 +526,8 @@ function spawnBallot(x, y, z, direction, color = "#f4ecd8", scale = 1, propertie
     damage: properties.damage,
     launch: properties.launch,
     unblockable: properties.unblockable,
+    special: properties.special,
+    owner: properties.owner,
     color
   });
 }
@@ -532,6 +548,59 @@ function spawnBurst(combatant, color = "#f4c96b", count = 12) {
       life: random(0.3, 0.75)
     });
   }
+}
+
+function spawnImpact(point, { launch = false, special = false, direction = 1 } = {}) {
+  const colors = special ? ["#ff3d42", "#ffba62"] :
+    launch ? ["#5cbfff", "#b8ecff"] : ["#ff8b19", "#fff285"];
+  const count = launch || special ? 18 : 12;
+  for (let i = 0; i < count; i += 1) {
+    const material = new THREE.MeshBasicMaterial({
+      color: colors[i % colors.length],
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false
+    });
+    const mesh = new THREE.Mesh(sparkGeometry, material);
+    mesh.position.copy(point);
+    mesh.scale.set(random(0.45, 0.9), random(1.4, 2.8), 0.6);
+    mesh.rotation.z = random(-Math.PI, Math.PI);
+    scene.add(mesh);
+    const life = random(0.22, 0.42);
+    impactEffects.push({
+      mesh,
+      kind: "spark",
+      velocity: new THREE.Vector3(random(-2.2, 2.2) + direction, random(-0.4, 3.2), random(-1.5, 1.5)),
+      life,
+      duration: life
+    });
+  }
+  if (launch || special) {
+    const material = new THREE.MeshBasicMaterial({
+      color: special ? "#ff3a42" : "#49b8ff",
+      side: THREE.DoubleSide,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false
+    });
+    const mesh = new THREE.Mesh(ringGeometry, material);
+    mesh.position.copy(point);
+    mesh.quaternion.copy(camera.quaternion);
+    mesh.scale.setScalar(0.2);
+    scene.add(mesh);
+    impactEffects.push({ mesh, kind: "ring", life: 0.38, duration: 0.38 });
+  }
+}
+
+function contactPoint(attacker, target, attack) {
+  const kick = attack.kind === "kick" || attack.kind === "spin" || attack.kind === "eco-spin";
+  return new THREE.Vector3(
+    target.x - attacker.facing * 0.28,
+    target.y + (kick ? 0.95 : 1.4),
+    target.z + clamp(attacker.z - target.z, -0.2, 0.2)
+  );
 }
 
 function attackDefinition(combatant, kind, extra = {}) {
@@ -569,7 +638,7 @@ function queueAttack(combatant, kind, extra = {}) {
 
 function getSpecial(combatant) {
   const id = combatant.definition.id;
-  const common = { damage: 15 + combatant.definition.stats.power, duration: 0.56, windup: 0.19, color: combatant.definition.accent };
+  const common = { damage: 15 + combatant.definition.stats.power, duration: 0.56, windup: 0.19, color: combatant.definition.accent, special: true };
   const details = {
     meloni: { kind: "rush", range: 2.15, launch: true, damage: 13, windup: 0.1, duration: 0.45 },
     salvini: { kind: "heavy", range: 1.7, knockdown: true, damage: 21, windup: 0.33, duration: 0.62, high: false },
@@ -602,7 +671,7 @@ function useSpecial(combatant) {
       combatant.facing,
       special.color,
       special.kind === "dossier" ? 1.7 : 1.45,
-      special
+      { ...special, owner: combatant }
     );
   } else {
     spawnBurst(combatant, special.color, 16);
@@ -652,10 +721,17 @@ function tryHit(attacker, target) {
   if (attack.launch && !targetAirborne) target.vy = 5.1;
   else if (attack.knockdown) target.vy = 2.2;
   attacker.vx = -attacker.facing * 0.22;
-  hitStop = Math.max(hitStop, 0.075);
+  hitStop = Math.max(hitStop, 0.06);
   shake = Math.max(shake, attack.knockdown ? 0.38 : 0.22);
+  if (attack.launch || attack.knockdown || attack.kind === "heavy") {
+    cameraTilt = attacker.facing * (attack.launch ? 0.045 : 0.03);
+  }
   spawnCallout(target.blocking ? "BLOCCATO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.65, target.z);
-  spawnBurst(target, target.blocking ? "#c8ddff" : attack.color, target.blocking ? 7 : 11);
+  spawnImpact(contactPoint(attacker, target, attack), {
+    launch: attack.launch,
+    special: attack.special,
+    direction: attacker.facing
+  });
   updateHealthDisplay();
   if (target.health <= 0) finishMatch(attacker);
 }
@@ -824,13 +900,13 @@ function updateBallots(dt) {
 
 function checkSingleProjectile(ballot) {
   if (ballot.hit || !matchActive) return;
-  const target = ballot.vx > 0 ? opponent : player;
-  if (!target) return;
+  const source = ballot.owner;
+  const target = source === player ? opponent : player;
+  if (!source || !target) return;
   if (Math.abs(ballot.mesh.position.x - target.x) < 0.48 &&
       Math.abs(ballot.mesh.position.z - target.z) < 0.85 &&
       Math.abs(ballot.mesh.position.y - target.y - 1.1) < 1.25 &&
       target.dodgeTimer <= 0) {
-    const source = target === player ? opponent : player;
     ballot.hit = true;
     ballot.life = 0;
     target.health = Math.max(0, target.health - (ballot.damage || 14));
@@ -838,9 +914,14 @@ function checkSingleProjectile(ballot) {
     target.vx = source.facing * 2.1;
     if (ballot.launch) target.vy = 4.6;
     spawnCallout(ballot.unblockable ? "VETO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.5, target.z);
-    spawnBurst(target, ballot.color || "#e8d491", 12);
-    hitStop = 0.065;
+    spawnImpact(ballot.mesh.position, {
+      launch: ballot.launch,
+      special: ballot.special,
+      direction: Math.sign(ballot.vx)
+    });
+    hitStop = Math.max(hitStop, 0.06);
     shake = 0.2;
+    if (ballot.launch) cameraTilt = Math.sign(ballot.vx) * 0.045;
     updateHealthDisplay();
     if (target.health <= 0) finishMatch(source);
   }
@@ -857,7 +938,30 @@ function updateParticles(dt) {
     particle.mesh.scale.multiplyScalar(0.985);
     if (particle.life <= 0) {
       scene.remove(particle.mesh);
+      particle.mesh.geometry.dispose();
+      particle.mesh.material.dispose();
       particles.splice(i, 1);
+    }
+  }
+}
+
+function updateImpactEffects(dt) {
+  for (let i = impactEffects.length - 1; i >= 0; i -= 1) {
+    const effect = impactEffects[i];
+    effect.life -= dt;
+    const progress = 1 - Math.max(effect.life, 0) / effect.duration;
+    effect.mesh.material.opacity = 1 - progress;
+    if (effect.kind === "spark") {
+      effect.mesh.position.addScaledVector(effect.velocity, dt);
+      effect.velocity.y -= 7 * dt;
+    } else {
+      effect.mesh.scale.setScalar(0.2 + progress * 1.25);
+      effect.mesh.quaternion.copy(camera.quaternion);
+    }
+    if (effect.life <= 0) {
+      scene.remove(effect.mesh);
+      effect.mesh.material.dispose();
+      impactEffects.splice(i, 1);
     }
   }
 }
@@ -873,36 +977,58 @@ function checkTimer(dt) {
 }
 
 function update(dt) {
-  if (hitStop > 0) {
-    hitStop -= dt;
-    dt *= 0.18;
-  }
+  if (dt <= 0) return;
   if (matchActive) {
     movePlayer(dt);
     updateAI(dt);
     updateCombatant(player, dt, opponent);
-    updateCombatant(opponent, dt, player);
+    if (hitStop <= 0) updateCombatant(opponent, dt, player);
     checkTimer(dt);
   }
   updateBallots(dt);
   updateParticles(dt);
   toastTimer -= dt;
   if (toastTimer <= 0) toast.classList.remove("show");
+}
+
+function updateCamera(dt) {
+  const focus = new THREE.Vector3(0, 1.5, -0.5);
+  let distance = 17.4;
+  if (player && opponent) {
+    focus.set(
+      (player.x + opponent.x) / 2,
+      1.45 + Math.max(player.y, opponent.y) * 0.35,
+      (player.z + opponent.z) / 2
+    );
+    const span = Math.abs(player.x - opponent.x) + Math.abs(player.z - opponent.z) * 0.3;
+    const horizontalFit = (span / 2 + 1.35) /
+      (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
+    distance = clamp(Math.max(8.7 + span * 0.65, horizontalFit + 2.5), 9.5, 48);
+  }
+  const desired = new THREE.Vector3(focus.x, focus.y + distance * 0.3, focus.z + distance);
+  const smoothing = 1 - Math.exp(-3.5 * dt);
+  cameraRig.lerp(desired, smoothing);
+  cameraTarget.lerp(focus, smoothing);
+  camera.position.copy(cameraRig);
+  if (shake > 0) {
+    camera.position.x += random(-shake, shake);
+    camera.position.y += random(-shake * 0.4, shake * 0.4);
+  }
+  camera.lookAt(cameraTarget);
+  camera.rotateZ(cameraTilt);
   shake = Math.max(0, shake - dt * 1.8);
+  cameraTilt *= Math.exp(-6 * dt);
 }
 
 function animate() {
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.04);
-  update(dt);
-  if (shake > 0) {
-    camera.position.x = random(-shake, shake);
-    camera.position.y = 7.4 + random(-shake * 0.4, shake * 0.4);
-    camera.lookAt(0, 1.5, -0.5);
-  } else if (camera.position.x !== 0 || camera.position.y !== 7.4) {
-    camera.position.set(0, 7.4, 17.4);
-    camera.lookAt(0, 1.5, -0.5);
-  }
+  const elapsedFrame = clock.getDelta();
+  const frozen = Math.min(hitStop, elapsedFrame);
+  hitStop -= frozen;
+  update(Math.min(elapsedFrame - frozen, 0.04));
+  const visualDt = Math.min(elapsedFrame, 0.1);
+  updateCamera(visualDt);
+  updateImpactEffects(visualDt);
   renderer.render(scene, camera);
 }
 
