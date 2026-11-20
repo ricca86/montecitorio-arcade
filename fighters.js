@@ -41,7 +41,7 @@ export const fighters = [
     initials: "AT",
     color: "#4b68ac",
     accent: "#e4d772",
-    hair: "#e5e3d9",
+    hair: "#c5cbd3",
     skin: "#e9bc9c",
     suit: "#283858",
     tie: "#4599d5",

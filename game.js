@@ -212,42 +212,45 @@ function createArena() {
 }
 
 function addGlasses(group) {
-  const glasses = new THREE.Group();
   for (const x of [-0.14, 0.14]) {
     const lens = new THREE.Mesh(
       new THREE.TorusGeometry(0.105, 0.018, 5, 12),
       material("#28272d", 0.36, 0.25)
     );
-    lens.position.set(x, 2.13, 0.337);
-    glasses.add(lens);
+    lens.position.set(x, 0.08, 0.38);
+    group.add(lens);
   }
-  addBox(glasses, [0.1, 0.026, 0.03], [0, 2.13, 0.345], "#29272b");
-  group.add(glasses);
+  addBox(group, [0.1, 0.026, 0.03], [0, 0.08, 0.39], "#29272b");
 }
 
-function createProp(group, fighter) {
+function createProp(hand, fighter) {
   const prop = new THREE.Group();
-  prop.position.set(0.62, 1.16, 0.05);
+  prop.name = `${fighter.id}-prop`;
+  prop.rotation.z = -2.2;
+  hand.add(prop);
   switch (fighter.prop) {
-    case "shovel":
-      addBox(prop, [0.09, 0.88, 0.09], [0, 0.28, 0], "#a98154", { rotation: [0, 0, -0.3] });
-      addBox(prop, [0.42, 0.37, 0.12], [0.13, -0.18, 0], "#497fb1", { rotation: [0, 0, -0.18] });
-      addSphere(prop, 0.09, [0, 0.75, 0], "#d7ba81");
+    case "shovel": {
+      addBox(prop, [0.38, 0.16, 0.24], [0.15, 0.07, 0], "#dfaa22");
+      addBox(prop, [0.12, 0.65, 0.14], [0.36, 0.32, 0], "#efc52e", { rotation: [0, 0, -0.55] });
+      addSphere(prop, 0.09, [0.53, 0.58, 0], "#4b4b48");
+      addBox(prop, [0.12, 0.48, 0.14], [0.68, 0.42, 0], "#f4ca36", { rotation: [0, 0, 0.65] });
+      addBox(prop, [0.3, 0.18, 0.28], [0.79, 0.2, 0], "#efbd21", { rotation: [0, 0, 0.35] });
+      addBox(prop, [0.3, 0.035, 0.29], [0.82, 0.11, 0], "#6e6145");
       break;
+    }
     case "briefcase":
-      addBox(prop, [0.55, 0.38, 0.2], [0.1, -0.02, 0], "#8c5c37");
-      addBox(prop, [0.19, 0.045, 0.045], [0.1, 0.22, 0.12], "#d7b15d");
-      addBox(prop, [0.055, 0.16, 0.06], [0.1, 0.18, 0.11], "#d7b15d");
+      addBox(prop, [0.55, 0.4, 0.2], [0.12, -0.15, 0], "#8c5c37");
+      addBox(prop, [0.19, 0.045, 0.045], [0.12, 0.1, 0.12], "#d7b15d");
       break;
     case "dossier":
-      for (let i = 0; i < 4; i += 1) {
-        addBox(prop, [0.5, 0.12, 0.31], [0.05, i * 0.105, 0], i % 2 ? "#efe6ce" : "#dfd4ba");
-        addBox(prop, [0.06, 0.115, 0.32], [-0.17, i * 0.105, 0], "#d66c5b");
+      for (let i = 0; i < 5; i += 1) {
+        addBox(prop, [0.64, 0.11, 0.42], [0.12, i * 0.1 - 0.19, 0.05], i % 2 ? "#fffaf0" : "#e5e1d8");
+        addBox(prop, [0.06, 0.105, 0.43], [-0.17, i * 0.1 - 0.19, 0.05], "#b9453c");
       }
       break;
     case "microphone":
-      addBox(prop, [0.07, 0.65, 0.07], [0, 0.17, 0], "#33323a");
-      addSphere(prop, 0.1, [0, 0.56, 0], "#38373f", [1, 1.25, 1]);
+      addBox(prop, [0.07, 0.48, 0.07], [0, 0.18, 0], "#33323a");
+      addSphere(prop, 0.1, [0, 0.46, 0], "#55545d", [1, 1.25, 1]);
       break;
     case "palette":
       addBox(prop, [0.46, 0.31, 0.08], [0.07, 0.02, 0], "#e5d3b6");
@@ -255,105 +258,145 @@ function createProp(group, fighter) {
         addSphere(prop, 0.075, [-0.08 + index * 0.105, 0.05, 0.07], color);
       });
       break;
-    case "pen":
-      addBox(prop, [0.09, 0.78, 0.09], [0, 0.12, 0], "#d8ad4c", { rotation: [0, 0, -0.12], metalness: 0.45 });
-      addSphere(prop, 0.09, [0, 0.56, 0], "#f1d27b", [1, 0.65, 1]);
+    case "pen": {
+      addBox(prop, [0.09, 0.7, 0.09], [0, 0.16, 0], "#d8ad4c", { metalness: 0.45 });
+      addBox(prop, [0.3, 0.06, 0.08], [0, 0.05, 0], "#f1d27b", { metalness: 0.45 });
+      const nib = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.2, 4), material("#ffdf7b", 0.3, 0.5));
+      nib.position.y = 0.61;
+      prop.add(nib);
       break;
+    }
     case "plant": {
-      addBox(prop, [0.35, 0.27, 0.3], [0, -0.04, 0], "#b96951");
-      for (let i = 0; i < 4; i += 1) {
-        addBox(prop, [0.035, 0.4, 0.035], [-0.12 + i * 0.08, 0.24, 0], "#5c8052");
-        addSphere(prop, 0.16, [-0.17 + i * 0.1, 0.43 + (i % 2) * 0.12, 0], i % 2 ? "#62a76e" : "#82b96d", [0.66, 1, 0.55]);
-      }
+      addBox(prop, [0.09, 1.05, 0.09], [0, 0.28, 0], "#785a35");
+      addBox(prop, [0.34, 0.27, 0.3], [0, -0.26, 0], "#b96951");
+      addSphere(prop, 0.23, [0, 0.83, 0], "#5da465", [1, 1.25, 0.8]);
+      addSphere(prop, 0.16, [-0.15, 0.68, 0], "#82b96d");
+      addSphere(prop, 0.16, [0.15, 0.72, 0], "#73b568");
       break;
     }
     default:
       makeFlag(prop, 0, 0, 0, ["#17965d", "#f7f1e4", "#d94c4c"]);
   }
-  group.add(prop);
   return prop;
+}
+
+function makeJoint(parent, name, position) {
+  const joint = new THREE.Group();
+  joint.name = name;
+  joint.position.set(...position);
+  parent.add(joint);
+  return joint;
+}
+
+function addStarCuff(elbow) {
+  addBox(elbow, [0.24, 0.1, 0.25], [0, -0.23, 0], "#f2eee4");
+  const star = new THREE.Shape();
+  for (let i = 0; i < 10; i += 1) {
+    const angle = Math.PI / 2 + i * Math.PI / 5;
+    const radius = i % 2 ? 0.023 : 0.055;
+    if (i === 0) star.moveTo(Math.cos(angle) * radius, Math.sin(angle) * radius);
+    else star.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius);
+  }
+  star.closePath();
+  const mesh = new THREE.Mesh(
+    new THREE.ShapeGeometry(star),
+    new THREE.MeshStandardMaterial({ color: "#ffe064", emissive: "#c99214", emissiveIntensity: 1.1, flatShading: true })
+  );
+  mesh.position.set(0, -0.23, 0.13);
+  elbow.add(mesh);
 }
 
 function buildFighterModel(definition, facing) {
   const root = new THREE.Group();
   root.scale.x = facing;
   const model = new THREE.Group();
+  model.scale.setScalar(definition.height);
   root.add(model);
 
-  const skin = material(definition.skin);
-  const suit = material(definition.suit);
-  const dark = material("#342c31");
-  const limbGeo = new THREE.CapsuleGeometry(0.115, 0.53, 3, 7);
-  const legGeo = new THREE.CapsuleGeometry(0.13, 0.51, 3, 7);
+  const hips = makeJoint(model, "hips", [0, 0.9, 0]);
+  const torso = makeJoint(hips, "torso", [0, 0.06, 0]);
+  const head = makeJoint(torso, "head", [0, 1.08, 0.02]);
+  const leftShoulder = makeJoint(torso, "leftShoulder", [-0.46, 0.62, 0.23]);
+  const rightShoulder = makeJoint(torso, "rightShoulder", [0.46, 0.62, 0.04]);
+  const leftElbow = makeJoint(leftShoulder, "leftElbow", [0, -0.34, 0]);
+  const rightElbow = makeJoint(rightShoulder, "rightElbow", [0, -0.34, 0]);
+  const leftHip = makeJoint(hips, "leftHip", [-0.23, 0, 0]);
+  const rightHip = makeJoint(hips, "rightHip", [0.23, 0, 0]);
+  const leftKnee = makeJoint(leftHip, "leftKnee", [0, -0.37, 0]);
+  const rightKnee = makeJoint(rightHip, "rightKnee", [0, -0.37, 0]);
+  const joints = { hips, torso, head, leftShoulder, leftElbow, rightShoulder, rightElbow, leftHip, leftKnee, rightHip, rightKnee };
 
-  addBox(model, [0.68, 0.75, 0.43], [0, 1.2, 0], definition.suit);
-  addBox(model, [0.2, 0.64, 0.04], [0, 1.18, 0.235], definition.tie);
-  addBox(model, [0.27, 0.2, 0.035], [0, 1.55, 0.24], "#f2eee4");
-  if (definition.id === "calenda" || definition.rolledSleeves) {
-    addBox(model, [0.16, 0.13, 0.46], [-0.27, 1.43, 0], "#f2eee4");
-    addBox(model, [0.16, 0.13, 0.46], [0.27, 1.43, 0], "#f2eee4");
+  addBox(hips, [0.55, 0.22, 0.38], [0, 0, 0], "#34303b");
+  const shoulders = definition.id === "schlein" ? 0.91 : definition.id === "meloni" ? 0.73 : 0.84;
+  addBox(torso, [shoulders, 0.72, 0.45], [0, 0.38, 0], definition.suit);
+  addBox(torso, [0.23, 0.6, 0.035], [0, 0.37, 0.24], definition.tie);
+  addBox(torso, [0.28, 0.17, 0.035], [0, 0.67, 0.24], "#f2eee4");
+  if (definition.id === "salvini") {
+    addBox(torso, [0.035, 0.66, 0.025], [0, 0.36, 0.25], "#afd0e3");
+    addBox(torso, [0.22, 0.12, 0.025], [-0.23, 0.48, 0.25], "#245d9c");
+  }
+  if (definition.id === "conte") addBox(torso, [0.15, 0.1, 0.025], [-0.26, 0.52, 0.25], "#f4ede0");
+  if (definition.pin) addSphere(torso, 0.06, [-0.29, 0.52, 0.25], "#edc735", [1, 1, 0.4]);
+
+  const upperColor = definition.id === "salvini" ? "#d8dfdf" : definition.suit;
+  const forearmColor = definition.rolledSleeves ? definition.skin : upperColor;
+  for (const [shoulder, elbow] of [[leftShoulder, leftElbow], [rightShoulder, rightElbow]]) {
+    addBox(shoulder, [0.25, 0.37, 0.29], [0, -0.17, 0], upperColor);
+    addSphere(shoulder, 0.13, [0, 0, 0], upperColor);
+    addBox(elbow, [0.21, 0.32, 0.23], [0, -0.16, 0], forearmColor);
+    if (definition.rolledSleeves) addBox(elbow, [0.25, 0.11, 0.26], [0, -0.02, 0], "#f1eee5");
+    if (definition.id === "tajani") addStarCuff(elbow);
+  }
+  const leftHand = makeJoint(leftElbow, "leftHand", [0, -0.34, 0.02]);
+  const rightHand = makeJoint(rightElbow, "rightHand", [0, -0.34, 0.02]);
+  addSphere(leftHand, 0.13, [0, 0, 0], definition.skin);
+  addSphere(rightHand, 0.13, [0, 0, 0], definition.skin);
+
+  for (const [hip, knee] of [[leftHip, leftKnee], [rightHip, rightKnee]]) {
+    addBox(hip, [0.27, 0.4, 0.3], [0, -0.18, 0], "#34303b");
+    addSphere(hip, 0.14, [0, 0, 0], "#34303b");
+    addBox(knee, [0.23, 0.37, 0.26], [0, -0.18, 0], "#34303b");
+    addBox(knee, [0.3, 0.15, 0.42], [0, -0.36, 0.08], "#201e26");
   }
 
-  const armL = new THREE.Mesh(limbGeo, suit);
-  armL.position.set(-0.49, 1.28, 0.03);
-  armL.rotation.z = -0.36;
-  armL.castShadow = true;
-  model.add(armL);
-  const armR = new THREE.Mesh(limbGeo, suit);
-  armR.position.set(0.49, 1.28, 0.03);
-  armR.rotation.z = 0.36;
-  armR.castShadow = true;
-  model.add(armR);
-  const handL = addSphere(model, 0.14, [-0.66, 0.96, 0.08], definition.skin);
-  const handR = addSphere(model, 0.14, [0.66, 0.96, 0.08], definition.skin);
-
-  for (const x of [-0.2, 0.2]) {
-    const leg = new THREE.Mesh(legGeo, dark);
-    leg.position.set(x, 0.48, 0);
-    leg.castShadow = true;
-    model.add(leg);
-    addBox(model, [0.31, 0.15, 0.42], [x, 0.11, 0.09], "#29252c");
-  }
-
-  addSphere(model, 0.43, [0, 2.03, 0.02], definition.skin, [0.9, 1.05, 0.88]);
-  addBox(model, [0.35, 0.11, 0.2], [0, 2.42, 0.015], definition.hair);
-  addSphere(model, 0.34, [0, 2.34, -0.035], definition.hair, [1.05, 0.48, 0.9]);
+  addSphere(head, 0.46, [0, 0, 0], definition.skin, [0.9, 1.05, 0.88]);
+  addSphere(head, 0.36, [0, 0.32, -0.04], definition.hair, [1.06, 0.48, 0.94]);
   if (definition.id === "meloni") {
-    addSphere(model, 0.3, [-0.3, 2.08, 0.015], definition.hair, [0.5, 0.78, 0.82]);
-    addSphere(model, 0.3, [0.3, 2.08, 0.015], definition.hair, [0.5, 0.78, 0.82]);
+    addBox(head, [0.2, 0.53, 0.46], [-0.34, 0.05, -0.02], definition.hair, { rotation: [0, 0, -0.1] });
+    addBox(head, [0.2, 0.53, 0.46], [0.34, 0.05, -0.02], definition.hair, { rotation: [0, 0, 0.1] });
+    addBox(head, [0.48, 0.11, 0.15], [0, 0.28, 0.28], definition.hair, { rotation: [0, 0, -0.12] });
   } else if (definition.wavyHair) {
     for (let i = 0; i < 5; i += 1) {
-      addSphere(model, 0.16, [-0.27 + i * 0.135, 2.35 + (i % 2) * 0.05, 0.07], definition.hair, [1, 0.8, 0.8]);
+      addSphere(head, 0.16, [-0.27 + i * 0.135, 0.31 + (i % 2) * 0.05, 0.08], definition.hair, [1, 0.8, 0.8]);
     }
   } else if (definition.slickHair) {
-    addBox(model, [0.59, 0.12, 0.38], [0, 2.31, -0.015], definition.hair, { rotation: [0.12, 0, 0] });
+    addSphere(head, 0.32, [0, 0.32, -0.1], definition.hair, [1.1, 0.7, 1]);
+    addBox(head, [0.6, 0.13, 0.38], [0, 0.29, -0.03], definition.hair, { rotation: [0.12, 0, 0] });
+  } else if (definition.id === "renzi") {
+    addBox(head, [0.56, 0.17, 0.35], [0, 0.31, -0.02], definition.hair, { rotation: [0, 0, -0.1] });
   }
 
   for (const x of [-0.15, 0.15]) {
-    addSphere(model, 0.065, [x, 2.1, 0.37], "#fff8ec", [1, 1, 0.45]);
-    addSphere(model, 0.029, [x + 0.018, 2.1, 0.401], "#2c2830", [1, 1, 0.5]);
-    addBox(model, [0.14, 0.035, 0.03], [x, 2.2, 0.37], definition.hair);
+    addSphere(head, 0.065, [x, 0.08, 0.39], "#fff8ec", [1, 1, 0.45]);
+    addSphere(head, 0.029, [x + 0.018, 0.08, 0.42], "#2c2830", [1, 1, 0.5]);
+    addBox(head, [0.14, 0.035, 0.03], [x, 0.18, 0.39], definition.hair, { rotation: [0, 0, definition.id === "meloni" ? Math.sign(x) * 0.18 : 0] });
   }
-  addSphere(model, 0.07, [0, 1.99, 0.42], definition.skin, [0.8, 0.75, 0.7]);
-  addBox(model, [0.16, 0.035, 0.025], [0, 1.83, 0.39], "#8c4c4a");
+  addSphere(head, 0.07, [0, -0.03, 0.44], definition.skin, [0.8, 0.75, 0.7]);
+  addBox(head, [0.16, 0.035, 0.025], [0, -0.19, 0.41], "#8c4c4a");
 
   if (definition.beard) {
-    addSphere(model, 0.28, [0, 1.83, 0.13], definition.hair, [0.92, 0.56, 0.85]);
-    addBox(model, [0.42, 0.18, 0.14], [0, 1.89, 0.31], definition.hair);
+    addSphere(head, 0.28, [0, -0.2, 0.13], definition.hair, [0.92, 0.56, 0.85]);
+    addBox(head, [0.42, 0.18, 0.14], [0, -0.14, 0.33], definition.hair);
   }
-  if (definition.glasses) addGlasses(model);
+  if (definition.glasses) addGlasses(head);
   if (definition.scarf) {
-    addBox(model, [0.68, 0.17, 0.5], [0, 1.64, 0.02], "#428555");
-    addBox(model, [0.18, 0.46, 0.11], [0.27, 1.42, 0.23], "#428555", { rotation: [0, 0, -0.1] });
-  }
-  if (definition.pin) addSphere(model, 0.07, [-0.24, 1.45, 0.24], "#edc735", [1, 1, 0.4]);
-  if (definition.id === "meloni") {
-    addBox(model, [0.18, 0.12, 0.035], [0.25, 1.53, 0.245], "#f0d95c");
+    addBox(torso, [0.72, 0.17, 0.5], [0, 0.74, 0.02], "#428555");
+    addBox(torso, [0.17, 0.62, 0.08], [-0.25, 0.58, -0.34], "#3e9257", { rotation: [-0.8, 0, -0.4] });
+    addBox(torso, [0.14, 0.46, 0.08], [-0.42, 0.48, -0.57], "#5ca565", { rotation: [-0.5, 0, -0.6] });
   }
 
-  const prop = createProp(model, definition);
-  root.position.y = 0;
-  return { root, model, armL, armR, handL, handR, prop };
+  const prop = createProp(rightHand, definition);
+  return { root, model, joints, leftHand, rightHand, prop };
 }
 
 function createCombatant(definition, x, z, facing, isPlayer) {
@@ -374,7 +417,6 @@ function createCombatant(definition, x, z, facing, isPlayer) {
     facing,
     attack: null,
     cooldown: 0,
-    attackPose: 0,
     dodgeTimer: 0,
     blockTimer: 0,
     blocking: false,
@@ -427,10 +469,20 @@ function showAnnouncer() {
   window.setTimeout(() => announcer.classList.remove("show"), 1700);
 }
 
+function disposeFighter(combatant) {
+  scene.remove(combatant.root);
+  combatant.root.traverse((part) => {
+    if (!part.isMesh) return;
+    part.geometry.dispose();
+    if (Array.isArray(part.material)) part.material.forEach((entry) => entry.dispose());
+    else part.material.dispose();
+  });
+}
+
 function beginMatch() {
   if (!selectedId || matchActive) return;
   if (fightersInMatch.length) {
-    fightersInMatch.forEach((combatant) => scene.remove(combatant.root));
+    fightersInMatch.forEach(disposeFighter);
     fightersInMatch.length = 0;
   }
   const choices = fighters.filter((fighter) => fighter.id !== selectedId);
@@ -467,7 +519,7 @@ function resetToSelect() {
   resultScreen.classList.add("hidden");
   selectScreen.classList.remove("hidden");
   document.querySelector("#hud").classList.remove("active");
-  fightersInMatch.forEach((combatant) => scene.remove(combatant.root));
+  fightersInMatch.forEach(disposeFighter);
   fightersInMatch.length = 0;
   player = null;
   opponent = null;
@@ -595,7 +647,7 @@ function spawnImpact(point, { launch = false, special = false, direction = 1 } =
 }
 
 function contactPoint(attacker, target, attack) {
-  const kick = attack.kind === "kick" || attack.kind === "spin" || attack.kind === "eco-spin";
+  const kick = attack.limb === "leftKick" || attack.limb === "rightKick";
   return new THREE.Vector3(
     target.x - attacker.facing * 0.28,
     target.y + (kick ? 0.95 : 1.4),
@@ -632,13 +684,12 @@ function queueAttack(combatant, kind, extra = {}) {
   const attack = attackDefinition(combatant, kind, extra);
   combatant.attack = { ...attack, age: 0, hit: false };
   combatant.cooldown = attack.duration + 0.04;
-  combatant.attackPose = attack.duration;
   combatant.blocking = false;
 }
 
 function getSpecial(combatant) {
   const id = combatant.definition.id;
-  const common = { damage: 15 + combatant.definition.stats.power, duration: 0.56, windup: 0.19, color: combatant.definition.accent, special: true };
+  const common = { damage: 15 + combatant.definition.stats.power, duration: 0.56, windup: 0.19, color: combatant.definition.accent, special: true, limb: id === "renzi" || id === "bonelli" ? "rightKick" : "rightPunch" };
   const details = {
     meloni: { kind: "rush", range: 2.15, launch: true, damage: 13, windup: 0.1, duration: 0.45 },
     salvini: { kind: "heavy", range: 1.7, knockdown: true, damage: 21, windup: 0.33, duration: 0.62, high: false },
@@ -681,22 +732,22 @@ function useSpecial(combatant) {
 function playerAttack(key) {
   if (!player || !matchActive) return;
   if (key === "i" && keys.has("s")) {
-    queueAttack(player, "launcher", { damage: 10, range: 1.38, windup: 0.17, duration: 0.42, launch: true });
+    queueAttack(player, "launcher", { damage: 10, range: 1.38, windup: 0.17, duration: 0.42, launch: true, limb: "rightPunch" });
     return;
   }
   if (key === "u") {
     if (player.comboWindow > 0) player.comboCount += 1;
     else player.comboCount = 1;
     player.comboWindow = 0.72;
-    queueAttack(player, "punch");
+    queueAttack(player, "punch", { limb: "leftPunch" });
   } else if (key === "i") {
     if (player.comboCount >= 2 && player.comboWindow > 0) {
-      queueAttack(player, "combo-finisher", { damage: 12, range: 1.5, launch: true, duration: 0.4 });
-    } else queueAttack(player, "punch", { damage: 8, range: 1.18 });
+      queueAttack(player, "combo-finisher", { damage: 12, range: 1.5, launch: true, duration: 0.4, limb: "rightPunch" });
+    } else queueAttack(player, "punch", { damage: 8, range: 1.18, limb: "rightPunch" });
     player.comboCount = 0;
     player.comboWindow = 0;
   }
-  else if (key === "j" || key === "k") queueAttack(player, "kick", { damage: 8, range: 1.4, low: true });
+  else if (key === "j" || key === "k") queueAttack(player, "kick", { damage: 8, range: 1.4, low: true, limb: key === "j" ? "leftKick" : "rightKick" });
 }
 
 function tryHit(attacker, target) {
@@ -790,7 +841,7 @@ function updateAI(dt) {
       break;
     case "ATTACK":
       if (ai.aiCombo < 2 && ai.cooldown <= 0) {
-        queueAttack(ai, ai.aiCombo === 0 ? "punch" : "kick", { damage: ai.aiCombo ? 8 : 6, range: 1.45 });
+        queueAttack(ai, ai.aiCombo === 0 ? "punch" : "kick", { damage: ai.aiCombo ? 8 : 6, range: 1.45, limb: ai.aiCombo === 0 ? "leftPunch" : "rightKick" });
         ai.aiCombo += 1;
       }
       if (ai.aiTimer <= 0) {
@@ -806,7 +857,7 @@ function updateAI(dt) {
     case "JUGGLE_FOLLOWUP":
       if (distance > 1.2) ai.vx = ai.facing * ai.definition.stats.speed * 0.2;
       if (distance < 1.8 && ai.cooldown <= 0 && player.y > 0.25) {
-        queueAttack(ai, "kick", { damage: 6, range: 1.9, windup: 0.1 });
+        queueAttack(ai, "kick", { damage: 6, range: 1.9, windup: 0.1, limb: "rightKick" });
       }
       if (ai.aiTimer <= 0 && player.y < 0.1) setAIState("IDLE", 0.45);
       break;
@@ -829,6 +880,50 @@ function movePlayer(dt) {
   player.blocking = keys.has("shift") || player.blockTimer > 0;
 }
 
+function poseFighter(combatant, dt) {
+  const { joints, definition, attack } = combatant;
+  const movement = clamp(Math.hypot(combatant.vx, combatant.vz) / 2.5, 0, 1);
+  combatant.walkPhase += dt * (3 + movement * 6);
+  const step = Math.sin(combatant.walkPhase) * movement;
+  const wide = definition.id === "renzi" ? 0.34 : definition.id === "schlein" ? 0.27 : 0.2;
+  const guard = combatant.blocking ? 0.3 : 0;
+
+  joints.hips.rotation.set(0, 0, step * 0.05);
+  joints.torso.rotation.set(0, -0.1, definition.id === "schlein" ? -0.12 : -0.06);
+  joints.head.rotation.set(0, 0.1, 0.04);
+  joints.leftShoulder.rotation.set(-0.2, 0, 0.8 + guard);
+  joints.rightShoulder.rotation.set(-0.2, 0, 1.05 + guard);
+  joints.leftElbow.rotation.set(-0.2, 0, 1.5 + guard);
+  joints.rightElbow.rotation.set(-0.2, 0, 1.2 + guard);
+  joints.leftHip.rotation.set(step * 0.2, 0, -wide + step * 0.24);
+  joints.rightHip.rotation.set(-step * 0.2, 0, wide - step * 0.24);
+  joints.leftKnee.rotation.set(Math.max(0, -step) * 0.4, 0, 0.16);
+  joints.rightKnee.rotation.set(Math.max(0, step) * 0.4, 0, -0.16);
+  combatant.model.position.y = Math.sin(combatant.walkPhase) * 0.018;
+
+  if (!attack) return;
+  const strike = clamp(
+    attack.age <= attack.windup
+      ? attack.age / attack.windup
+      : 1 - (attack.age - attack.windup) / Math.max(0.01, attack.duration - attack.windup),
+    0, 1
+  );
+  joints.torso.rotation.z -= strike * 0.12;
+  if (attack.limb === "leftPunch" || attack.limb === "rightPunch") {
+    const shoulder = attack.limb === "leftPunch" ? joints.leftShoulder : joints.rightShoulder;
+    const elbow = attack.limb === "leftPunch" ? joints.leftElbow : joints.rightElbow;
+    shoulder.rotation.z = THREE.MathUtils.lerp(shoulder.rotation.z, 1.45, strike);
+    shoulder.rotation.x = THREE.MathUtils.lerp(shoulder.rotation.x, -0.05, strike);
+    elbow.rotation.z = THREE.MathUtils.lerp(elbow.rotation.z, 0.08, strike);
+  } else if (attack.limb === "leftKick" || attack.limb === "rightKick") {
+    const hip = attack.limb === "leftKick" ? joints.leftHip : joints.rightHip;
+    const knee = attack.limb === "leftKick" ? joints.leftKnee : joints.rightKnee;
+    hip.rotation.z = THREE.MathUtils.lerp(hip.rotation.z, 1.35, strike);
+    knee.rotation.z = THREE.MathUtils.lerp(knee.rotation.z, 0.12, strike);
+    joints.torso.rotation.z -= strike * 0.12;
+  }
+}
+
 function updateCombatant(combatant, dt, opponentBody) {
   if (!combatant) return;
   combatant.cooldown = Math.max(0, combatant.cooldown - dt);
@@ -838,7 +933,6 @@ function updateCombatant(combatant, dt, opponentBody) {
   combatant.blockTimer = Math.max(0, combatant.blockTimer - dt);
   if (!combatant.isPlayer && combatant.blockTimer <= 0) combatant.blocking = false;
   if (combatant.isPlayer) combatant.blocking = keys.has("shift") || combatant.blockTimer > 0;
-  combatant.attackPose = Math.max(0, combatant.attackPose - dt);
   combatant.spinTimer = Math.max(0, combatant.spinTimer - dt);
 
   if (combatant.attack) {
@@ -868,13 +962,9 @@ function updateCombatant(combatant, dt, opponentBody) {
   }
   combatant.root.position.set(combatant.x, combatant.y, combatant.z);
   combatant.root.scale.x = combatant.facing;
-  combatant.root.rotation.y = combatant.spinTimer > 0 ? Math.sin(combatant.spinTimer * 34) * 0.7 : 0;
-  combatant.model.rotation.z = combatant.attackPose > 0 ? -combatant.facing * 0.08 : 0;
-  const armSwing = combatant.attackPose > 0 ? Math.sin((combatant.attackPose / 0.55) * Math.PI) * 0.75 : 0;
-  combatant.armR.rotation.z = 0.36 - armSwing * combatant.facing;
-  combatant.armL.rotation.z = -0.36 + armSwing * 0.45 * combatant.facing;
-  const bob = combatant.y === 0 ? Math.sin(performance.now() * 0.006 + (combatant.isPlayer ? 0 : 1)) * 0.025 : 0;
-  combatant.model.position.y = bob;
+  combatant.root.rotation.y = combatant.spinTimer > 0 && combatant.attack
+    ? combatant.attack.age / combatant.attack.duration * Math.PI * 2 : 0;
+  poseFighter(combatant, dt);
 }
 
 function updateBallots(dt) {
