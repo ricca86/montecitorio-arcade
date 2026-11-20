@@ -221,7 +221,8 @@ h1 span { color: #f3c7a8; }
 .primary-button:disabled { opacity: .44; cursor: not-allowed; }
 .select-hint { margin: 12px 0 0; color: #897f90; font-size: 8px; text-align: center; }
 .hidden { display: none !important; }
-.result-card { width: min(400px, 100%); padding: 28px; border: 1px solid rgba(255,255,255,.22); border-radius: 14px; text-align: center; background: var(--panel); backdrop-filter: blur(10px); }
+.result-screen { place-items: end start; background: linear-gradient(0deg, rgba(20, 12, 24, .45), transparent 50%); pointer-events: none; }
+.result-card { width: min(300px, 100%); padding: 18px; border: 2px ridge #d8dce2; border-radius: 0; text-align: center; background: var(--panel); backdrop-filter: blur(10px); pointer-events: auto; }
 .result-card h2 { color: var(--gold); }
 .result-card p { margin: 8px 0 20px; color: #c8bdce; }
 .signature-toast { position: absolute; z-index: 3; right: 20px; bottom: 17px; padding: 8px 12px; border: 1px solid rgba(255,255,255,.25); border-radius: 5px; color: #fff3d4; background: rgba(26,19,32,.8); font: 500 9px "DM Mono", monospace; letter-spacing: .08em; opacity: 0; transition: opacity .2s; pointer-events: none; }
