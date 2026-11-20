@@ -55,6 +55,7 @@ const fightersInMatch = [];
 const ballots = [];
 const particles = [];
 const impactEffects = [];
+const sidestepGhosts = [];
 const comicWords = ["RIBALTONE!", "VETO!", "FIDUCIA!", "QUORUM!"];
 const cameraRig = new THREE.Vector3(0, 7.4, 17.4);
 const cameraTarget = new THREE.Vector3(0, 1.5, -0.5);
@@ -451,6 +452,7 @@ function buildFighterModel(definition, facing) {
   const hips = makeJoint(model, "hips", [0, 0.9, 0]);
   const torso = makeJoint(hips, "torso", [0, 0.06, 0]);
   const head = makeJoint(torso, "head", [0, 1.08, 0.02]);
+  head.rotation.order = "YXZ";
   const leftShoulder = makeJoint(torso, "leftShoulder", [-0.46, 0.62, 0.23]);
   const rightShoulder = makeJoint(torso, "rightShoulder", [0.46, 0.62, 0.04]);
   const leftElbow = makeJoint(leftShoulder, "leftElbow", [0, -0.34, 0]);
@@ -476,8 +478,10 @@ function buildFighterModel(definition, facing) {
   const tie = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.46), material("#ffffff"));
   tie.name = "tie";
   tie.material.map = pixelTexture(definition, "tie");
-  tie.position.set(0, 0.4, 0.263);
-  torso.add(tie);
+  const tiePivot = makeJoint(torso, "tiePivot", [0, 0.63, 0.263]);
+  tie.position.set(0, -0.23, 0);
+  tiePivot.add(tie);
+  clothing.push({ joint: tiePivot, side: 1, kind: "tie" });
   for (const side of [-1, 1]) {
     panel(torso, "lapel", [[side * 0.1, 0.66], [side * 0.31, 0.73], [side * 0.27, 0.53], [side * 0.17, 0.48], [side * 0.08, 0.19]],
       [0, 0, 0.25], definition.suit);
@@ -547,32 +551,41 @@ function buildFighterModel(definition, facing) {
   nose.position.set(0, -0.035, 0.43);
   nose.rotation.x = Math.PI / 2;
   head.add(nose);
-  addSphere(head, 0.36, [0, 0.32, -0.04], definition.hair, [1.06, 0.48, 0.94]);
+  const hairPivot = makeJoint(head, "hairPivot", [0, 0.25, 0]);
+  const hair = makeJoint(hairPivot, "hair", [0, -0.25, 0]);
+  clothing.push({ joint: hairPivot, side: 1, kind: "hair" });
+  addSphere(hair, 0.36, [0, 0.32, -0.04], definition.hair, [1.06, 0.48, 0.94]);
   if (definition.id === "meloni") {
     for (const side of [-1, 1]) {
+      const pivot = makeJoint(hair, "hairLockPivot", [side * 0.32, 0.25, 0]);
+      const locks = makeJoint(pivot, "hairLocks", [-side * 0.32, -0.25, 0]);
+      clothing.push({ joint: pivot, side, kind: "hair" });
       for (let i = 0; i < 3; i += 1) {
-        const lock = addSphere(head, 0.19, [side * (0.32 + i * 0.025), 0.13 - i * 0.12, -0.02 + i * 0.05], definition.hair, [0.65, 1.1, 1.2]);
+        const lock = addSphere(locks, 0.19, [side * (0.32 + i * 0.025), 0.13 - i * 0.12, -0.02 + i * 0.05], definition.hair, [0.65, 1.1, 1.2]);
         lock.rotation.z = side * 0.14;
       }
     }
-    const fringe = addSphere(head, 0.3, [-0.08, 0.28, 0.2], definition.hair, [1.05, 0.35, 0.6]);
+    const fringe = addSphere(hair, 0.3, [-0.08, 0.28, 0.2], definition.hair, [1.05, 0.35, 0.6]);
     fringe.rotation.z = -0.16;
   } else if (definition.wavyHair) {
     for (let i = 0; i < 6; i += 1) {
-      addSphere(head, 0.17, [-0.33 + i * 0.13, 0.34 + (i % 2) * 0.06, 0.07], definition.hair, [0.85, 1, 0.85]);
+      addSphere(hair, 0.17, [-0.33 + i * 0.13, 0.34 + (i % 2) * 0.06, 0.07], definition.hair, [0.85, 1, 0.85]);
     }
     for (const x of [-0.34, 0.34]) {
+      const pivot = makeJoint(hair, "hairLockPivot", [x, 0.25, 0]);
+      const locks = makeJoint(pivot, "hairLocks", [-x, -0.25, 0]);
+      clothing.push({ joint: pivot, side: Math.sign(x), kind: "hair" });
       for (let i = 0; i < 4; i += 1) {
-        addSphere(head, 0.16, [x + Math.sign(x) * (i % 2) * 0.04, 0.15 - i * 0.14, -0.04], definition.hair, [0.85, 1.15, 0.85]);
+        addSphere(locks, 0.16, [x + Math.sign(x) * (i % 2) * 0.04, 0.15 - i * 0.14, -0.04], definition.hair, [0.85, 1.15, 0.85]);
       }
     }
   } else if (definition.slickHair) {
     for (let i = 0; i < 4; i += 1) {
-      const lock = addSphere(head, 0.24, [-0.23 + i * 0.15, 0.4 + (i === 1 ? 0.08 : 0), 0.08], definition.hair, [0.6, 0.75, 1.3]);
+      const lock = addSphere(hair, 0.24, [-0.23 + i * 0.15, 0.4 + (i === 1 ? 0.08 : 0), 0.08], definition.hair, [0.6, 0.75, 1.3]);
       lock.rotation.x = -0.35;
     }
   } else if (definition.id === "renzi") {
-    const fringe = addSphere(head, 0.3, [0, 0.32, 0.08], definition.hair, [1, 0.45, 0.9]);
+    const fringe = addSphere(hair, 0.3, [0, 0.32, 0.08], definition.hair, [1, 0.45, 0.9]);
     fringe.rotation.z = -0.1;
   }
 
@@ -617,6 +630,7 @@ function createCombatant(definition, x, z, facing, isPlayer) {
     attack: null,
     cooldown: 0,
     dodgeTimer: 0,
+    ghostTimer: 0,
     blockTimer: 0,
     blocking: false,
     stun: 0,
@@ -674,6 +688,7 @@ function showAnnouncer() {
 }
 
 function disposeFighter(combatant) {
+  clearSidestepGhosts(combatant);
   scene.remove(combatant.root);
   combatant.root.traverse((part) => {
     if (!part.isMesh) return;
@@ -1114,6 +1129,63 @@ function movePlayer(dt) {
   player.blocking = keys.has("shift") || player.blockTimer > 0;
 }
 
+function spawnSidestepGhost(combatant) {
+  const ghost = combatant.root.clone();
+  const ghostMaterial = new THREE.MeshBasicMaterial({
+    color: combatant.definition.color, transparent: true, opacity: 0.13,
+    depthWrite: false, side: THREE.DoubleSide
+  });
+  ghost.traverse((part) => {
+    if (!part.isMesh) return;
+    part.material = ghostMaterial;
+    part.castShadow = false;
+    part.receiveShadow = false;
+  });
+  scene.add(ghost);
+  sidestepGhosts.push({ ghost, material: ghostMaterial, owner: combatant, life: 0.18 });
+}
+
+function clearSidestepGhosts(owner) {
+  for (let i = sidestepGhosts.length - 1; i >= 0; i -= 1) {
+    const entry = sidestepGhosts[i];
+    if (owner && entry.owner !== owner) continue;
+    scene.remove(entry.ghost);
+    entry.material.dispose();
+    sidestepGhosts.splice(i, 1);
+  }
+}
+
+function updateSidestepGhosts(dt) {
+  for (let i = sidestepGhosts.length - 1; i >= 0; i -= 1) {
+    const entry = sidestepGhosts[i];
+    entry.life -= dt;
+    entry.material.opacity = 0.13 * Math.max(entry.life, 0) / 0.18;
+    if (entry.life <= 0) {
+      scene.remove(entry.ghost);
+      entry.material.dispose();
+      sidestepGhosts.splice(i, 1);
+    }
+  }
+}
+
+function springAccessory(piece, targetX, targetZ, dt) {
+  if (!piece.spring) {
+    piece.spring = { x: piece.joint.rotation.x, z: piece.joint.rotation.z, vx: 0, vz: 0 };
+  }
+  const spring = piece.spring;
+  let remaining = Math.min(dt, 0.1);
+  while (remaining > 0) {
+    const step = Math.min(remaining, 1 / 120);
+    spring.vx += ((targetX - spring.x) * 90 - spring.vx * 12) * step;
+    spring.vz += ((targetZ - spring.z) * 90 - spring.vz * 12) * step;
+    spring.x += spring.vx * step;
+    spring.z += spring.vz * step;
+    remaining -= step;
+  }
+  piece.joint.rotation.x = spring.x;
+  piece.joint.rotation.z = spring.z;
+}
+
 function sampleKeyframes(time, frames) {
   for (let i = 1; i < frames.length; i += 1) {
     if (time <= frames[i][0]) {
@@ -1126,7 +1198,7 @@ function sampleKeyframes(time, frames) {
   return frames[frames.length - 1][1];
 }
 
-function poseFighter(combatant, dt) {
+function poseFighter(combatant, dt, opponentBody = null) {
   const { joints, definition, attack } = combatant;
   const movement = clamp(Math.hypot(combatant.vx, combatant.vz) / 2.5, 0, 1);
   combatant.animationTime += dt;
@@ -1135,9 +1207,13 @@ function poseFighter(combatant, dt) {
   const bounce = Math.sin(combatant.animationTime * 6.5);
   const wide = definition.id === "renzi" ? 0.34 : definition.id === "schlein" ? 0.27 : 0.2;
   const guard = combatant.blocking ? 0.3 : 0;
+  const sidestep = combatant.dodgeTimer > 0 && Math.abs(combatant.vz) > 0.3 && !combatant.airborne;
+  const side = sidestep ? Math.sign(combatant.vz) : 0;
 
   joints.hips.rotation.set(0, 0, step * 0.05 + bounce * 0.035);
   joints.torso.rotation.set(0, -0.1, (definition.id === "schlein" ? -0.12 : -0.06) + bounce * 0.025);
+  const breath = Math.sin(combatant.animationTime * 2.4);
+  joints.torso.scale.set(1 + breath * 0.012, 1 + breath * 0.006, 1 + breath * 0.018);
   joints.head.rotation.set(0, 0.1, 0.04 - bounce * 0.02);
   joints.leftShoulder.rotation.set(-0.2, 0, 0.8 + guard + bounce * 0.06);
   joints.rightShoulder.rotation.set(-0.2, 0, 1.05 + guard - bounce * 0.06);
@@ -1148,26 +1224,42 @@ function poseFighter(combatant, dt) {
   joints.leftKnee.rotation.set(Math.max(0, -step) * 0.4 + (bounce + 1) * 0.06, 0, 0.16);
   joints.rightKnee.rotation.set(Math.max(0, step) * 0.4 + (bounce + 1) * 0.06, 0, -0.16);
   combatant.model.position.set(0, (bounce + 1) * 0.025, 0);
+  combatant.prop.rotation.z = -2.2;
 
   combatant.root.rotation.y = 0;
+  if (sidestep) {
+    const dip = clamp(Math.abs(combatant.vz) / 3.8, 0, 1);
+    joints.torso.rotation.x += side * 0.22 * dip;
+    joints.torso.rotation.z -= side * 0.13 * dip;
+    joints.hips.rotation.y += side * 0.3 * dip;
+    joints.leftKnee.rotation.x += 0.32 * dip;
+    joints.rightKnee.rotation.x += 0.32 * dip;
+    combatant.model.position.y -= 0.09 * dip;
+    combatant.root.rotation.y = side * 0.18 * dip;
+  }
   if (attack && !combatant.airborne && combatant.landingTime <= 0) {
     const progress = clamp(attack.age / attack.duration, 0, 1);
     const impact = clamp(attack.windup / attack.duration, 0.01, 0.95);
     const holdEnd = Math.min(impact + 0.065 / attack.duration, 0.98);
     const strike = sampleKeyframes(progress, [
-      [0, 0], [impact, 1], [holdEnd, 1], [1, 0]
+      [0, 0], [impact * 0.6, 0], [impact, 1], [holdEnd, 1], [1, 0]
     ]);
     const crouch = sampleKeyframes(progress, [
       [0, 0], [impact * 0.6, 1], [impact, 0], [1, 0]
     ]);
+    joints.torso.rotation.y -= crouch * 0.32;
+    joints.hips.rotation.y += crouch * 0.22;
+    joints.leftKnee.rotation.x += crouch * 0.25 + strike * 0.08;
+    joints.rightKnee.rotation.x += crouch * 0.12 + strike * 0.3;
+    combatant.model.position.x += strike * 0.13 - crouch * 0.1;
     const punch = (side, angle = 1.45, amount = strike) => {
       const shoulder = side === "left" ? joints.leftShoulder : joints.rightShoulder;
       const elbow = side === "left" ? joints.leftElbow : joints.rightElbow;
-      shoulder.rotation.z = THREE.MathUtils.lerp(shoulder.rotation.z, angle, amount);
+      shoulder.rotation.z = THREE.MathUtils.lerp(shoulder.rotation.z - crouch * 0.4, angle, amount);
       shoulder.rotation.x = THREE.MathUtils.lerp(shoulder.rotation.x, -0.05, amount);
-      elbow.rotation.z = THREE.MathUtils.lerp(elbow.rotation.z, 0.08, amount);
-      joints.hips.rotation.y = amount * 0.25;
-      joints.torso.rotation.y = -0.1 + amount * 0.65;
+      elbow.rotation.z = THREE.MathUtils.lerp(elbow.rotation.z + crouch * 0.35, 0.08, amount);
+      joints.hips.rotation.y = crouch * 0.22 + amount * 0.25;
+      joints.torso.rotation.y = -0.1 - crouch * 0.32 + amount * 0.65;
       joints.torso.rotation.z -= amount * 0.12;
     };
     const kick = (side) => {
@@ -1219,6 +1311,13 @@ function poseFighter(combatant, dt) {
         ]);
       }
       switch (definition.id) {
+        case "meloni":
+          joints.leftShoulder.rotation.z = THREE.MathUtils.lerp(joints.leftShoulder.rotation.z - crouch * 0.4, 1.65, strike);
+          joints.rightShoulder.rotation.z = THREE.MathUtils.lerp(joints.rightShoulder.rotation.z - crouch * 0.4, 1.65, strike);
+          joints.leftElbow.rotation.z = THREE.MathUtils.lerp(joints.leftElbow.rotation.z + crouch * 0.3, 0.12, strike);
+          joints.rightElbow.rotation.z = THREE.MathUtils.lerp(joints.rightElbow.rotation.z + crouch * 0.3, 0.12, strike);
+          combatant.model.position.x += strike * 0.22;
+          break;
         case "salvini":
           joints.rightShoulder.rotation.z = sampleKeyframes(progress, [
             [0, 1.05], [impact * 0.6, 2.9], [impact, 1.4],
@@ -1226,11 +1325,15 @@ function poseFighter(combatant, dt) {
           ]);
           joints.rightElbow.rotation.z = THREE.MathUtils.lerp(1.2, 0.2, strike);
           joints.torso.rotation.z += crouch * 0.2 - strike * 0.24;
+          joints.leftShoulder.rotation.z += crouch * 0.8;
+          combatant.model.position.y += Math.sin(progress * Math.PI) * 0.24;
+          joints.leftKnee.rotation.x += Math.sin(progress * Math.PI) * 0.45;
           break;
         case "tajani":
-          joints.rightShoulder.rotation.z += crouch * 1.4;
-          joints.leftShoulder.rotation.z += crouch * 0.6;
-          joints.leftElbow.rotation.z += crouch * 0.4;
+          joints.leftShoulder.rotation.z += crouch * 1.1;
+          joints.leftElbow.rotation.z += crouch * 0.7;
+          joints.rightShoulder.rotation.z -= crouch * 0.5;
+          joints.rightElbow.rotation.z += crouch * 0.5;
           joints.torso.rotation.z += crouch * 0.2;
           break;
         case "renzi":
@@ -1238,27 +1341,32 @@ function poseFighter(combatant, dt) {
           joints.torso.rotation.y += strike * 0.4;
           break;
         case "calenda":
-          joints.rightShoulder.rotation.z += crouch * 1.4;
-          joints.leftShoulder.rotation.z += crouch * 0.65 - strike * 0.3;
+          joints.rightShoulder.rotation.z = THREE.MathUtils.lerp(joints.rightShoulder.rotation.z + crouch * 1.6, 1.4, strike);
+          joints.leftShoulder.rotation.z += crouch * 1.3 - strike * 0.5;
           joints.leftElbow.rotation.z -= strike * 0.7;
+          joints.torso.rotation.z += crouch * 0.25 - strike * 0.3;
           combatant.model.position.x += strike * 0.16;
           break;
         case "schlein":
-          joints.rightShoulder.rotation.z += crouch * 1.4;
+          joints.rightShoulder.rotation.z = THREE.MathUtils.lerp(joints.rightShoulder.rotation.z - crouch * 0.3, 2.45, strike);
           joints.rightShoulder.rotation.x -= strike * 0.9;
           joints.rightElbow.rotation.y += Math.sin(attack.age * 20) * strike * 0.5;
-          joints.torso.rotation.z += strike * 0.2;
+          joints.torso.rotation.z += crouch * 0.2 - strike * 0.2;
+          combatant.model.position.y += strike * 0.12 - crouch * 0.08;
           break;
         case "conte":
-          joints.rightShoulder.rotation.z += crouch * 1.4;
+          joints.rightShoulder.rotation.z -= crouch * 0.45;
           joints.rightShoulder.rotation.y -= strike * 0.6;
+          joints.rightElbow.rotation.z += Math.sin(progress * Math.PI * 4) * strike * 0.25;
           joints.rightElbow.rotation.x += strike * 0.45;
+          combatant.model.position.x += strike * 0.2;
           joints.head.rotation.z -= crouch * 0.15;
           break;
         case "bonelli":
           joints.rightShoulder.rotation.z = THREE.MathUtils.lerp(joints.rightShoulder.rotation.z, 2.6, strike);
           joints.rightElbow.rotation.z = THREE.MathUtils.lerp(joints.rightElbow.rotation.z, 0.3, strike);
           joints.leftShoulder.rotation.z -= strike * 0.5;
+          combatant.prop.rotation.z += progress * Math.PI * 2;
           break;
       }
     }
@@ -1267,14 +1375,34 @@ function poseFighter(combatant, dt) {
   const recoil = clamp(combatant.reactionTime / 0.3, 0, 1);
   joints.torso.rotation.z += recoil * 0.55;
   joints.head.rotation.z += recoil * 0.2;
-  const action = attack ? Math.sin(clamp(attack.age / attack.duration, 0, 1) * Math.PI) : 0;
-  for (const { joint, side, kind } of combatant.clothing) {
-    const flutter = Math.sin(combatant.animationTime * 6.5 + side) * (0.04 + movement * 0.18 + action * 0.15);
-    joint.rotation.x = (kind === "scarf" ? -0.4 : 0) - movement * 0.25 - action * 0.2 + flutter;
-    joint.rotation.z = side * (0.08 + movement * 0.1) + flutter * 0.7;
-  }
   combatant.model.rotation.z = combatant.airRotation;
   combatant.model.position.y += Math.abs(Math.sin(combatant.airRotation)) * 0.38 * definition.height;
+  if (opponentBody) {
+    const target = new THREE.Vector3();
+    opponentBody.joints.head.getWorldPosition(target);
+    joints.head.parent.worldToLocal(target);
+    target.sub(joints.head.position);
+    const yaw = Math.atan2(target.x, target.z);
+    const pitch = -Math.atan2(target.y, Math.hypot(target.x, target.z));
+    const tracking = 1 - Math.exp(-8 * dt);
+    const previousYaw = combatant.headYaw ?? 0;
+    const yawDelta = Math.atan2(Math.sin(yaw - previousYaw), Math.cos(yaw - previousYaw));
+    combatant.headYaw = previousYaw + yawDelta * tracking;
+    combatant.headPitch = THREE.MathUtils.lerp(combatant.headPitch ?? 0, pitch, tracking);
+    joints.head.rotation.y = combatant.headYaw;
+    joints.head.rotation.x = combatant.headPitch;
+  }
+  const action = attack ? Math.sin(clamp(attack.age / attack.duration, 0, 1) * Math.PI) : 0;
+  const motionX = clamp(combatant.vz * 0.06 + (combatant.vy || 0) * 0.025, -0.35, 0.35);
+  const motionZ = clamp(combatant.vx * combatant.facing * 0.04 + joints.torso.rotation.z * 0.5 + action * 0.2, -0.45, 0.45);
+  for (const piece of combatant.clothing) {
+    const { side: pieceSide, kind } = piece;
+    const strength = kind === "hair" ? 0.35 : kind === "tie" ? 0.55 : 1;
+    const baseX = kind === "scarf" ? -0.4 : 0;
+    const baseZ = kind === "coat" || kind === "scarf" ? pieceSide * 0.08 : 0;
+    const flutter = Math.sin(combatant.animationTime * 4 + pieceSide) * 0.025;
+    springAccessory(piece, baseX - motionX * strength + flutter, baseZ - motionZ * strength + flutter, dt);
+  }
 }
 
 function updateCombatant(combatant, dt, opponentBody) {
@@ -1333,7 +1461,14 @@ function updateCombatant(combatant, dt, opponentBody) {
   }
   combatant.root.position.set(combatant.x, combatant.y, combatant.z);
   combatant.root.scale.x = combatant.facing;
-  poseFighter(combatant, dt);
+  poseFighter(combatant, dt, opponentBody);
+  if (combatant.dodgeTimer > 0 && Math.abs(combatant.vz) > 0.8 && !combatant.airborne) {
+    combatant.ghostTimer = (combatant.ghostTimer ?? 0) - dt;
+    if (combatant.ghostTimer <= 0) {
+      spawnSidestepGhost(combatant);
+      combatant.ghostTimer = 0.09;
+    }
+  } else combatant.ghostTimer = 0;
 }
 
 function updateBallots(dt) {
@@ -1505,6 +1640,7 @@ function update(dt) {
   }
   updateBallots(dt);
   updateParticles(dt);
+  updateSidestepGhosts(dt);
   toastTimer -= dt;
   if (toastTimer <= 0) toast.classList.remove("show");
 }
