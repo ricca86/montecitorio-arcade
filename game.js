@@ -363,6 +363,7 @@ function createCombatant(definition, x, z, facing, isPlayer) {
     y: 0,
     vx: 0,
     vy: 0,
+    vz: 0,
     health: 100,
     facing,
     attack: null,
