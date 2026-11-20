@@ -4,6 +4,7 @@ import { sound } from "./sound.js";
 import { TournamentManager, difficultyForStage, formatTournamentTime } from "./tournament.js";
 import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
 import { attackHeight, defenseOutcome, isCounterHit } from "./defense.js";
+import { InputState, keyboardActions, gamepadActions } from "./input.js";
 
 const mount = document.querySelector("#game-canvas");
 const rosterNode = document.querySelector("#roster");
@@ -17,8 +18,12 @@ const stageElement = document.querySelector(".stage");
 const calloutLayer = document.querySelector("#callout-layer");
 const announcer = document.querySelector("#announcer");
 const toast = document.querySelector("#signature-toast");
+const controllerToast = document.querySelector("#controller-toast");
 const startButton = document.querySelector("#start-button");
 const musicToggle = document.querySelector("#music-toggle");
+const touchToggle = document.querySelector("#touch-toggle");
+const touchControls = document.querySelector("#touch-controls");
+const rotatePrompt = document.querySelector("#rotate-prompt");
 const playerHealthNode = document.querySelector("#player-health");
 const opponentHealthNode = document.querySelector("#opponent-health");
 const playerTrailNode = document.querySelector("#player-trail");
@@ -58,8 +63,11 @@ scene.add(rimLight);
 
 const clock = new THREE.Clock();
 const fightersById = new Map(fighters.map((fighter) => [fighter.id, fighter]));
-const keys = new Set();
-const lastTap = { w: 0, s: 0, ArrowUp: 0, ArrowDown: 0 };
+const inputState = new InputState();
+const lastTap = { up: 0, down: 0 };
+const touchPointers = new Map();
+const gamepadPrevious = new Map();
+let touchEnabled = "ontouchstart" in window || navigator.maxTouchPoints > 0;
 const fightersInMatch = [];
 const ballots = [];
 const particles = [];
@@ -95,6 +103,7 @@ let bannerPending = false;
 let nextBallot = 0;
 let announcerTimer = 0;
 let pausedAnimations = [];
+let controllerNoticeUntil = 0;
 
 const clamp = THREE.MathUtils.clamp;
 const random = (min, max) => min + Math.random() * (max - min);
@@ -899,8 +908,7 @@ function startRound() {
   clearTimeout(ladderTimeout);
   ladderTimeout = null;
   clearCombatEffects();
-  keys.clear();
-  lastTap.w = lastTap.s = lastTap.ArrowUp = lastTap.ArrowDown = 0;
+  clearInputs();
   sound.confirm();
   sound.startMatch();
   if (fightersInMatch.length) {
@@ -928,6 +936,7 @@ function startRound() {
   elapsed = 60;
   matchOver = false;
   matchActive = true;
+  updateTouchVisibility();
   victory = null;
   hitStop = 0;
   for (const trail of [playerTrailNode, opponentTrailNode]) {
@@ -957,8 +966,8 @@ function setPaused(paused) {
     pausedAnimations.forEach((animation) => animation.pause());
   }
   isPaused = paused;
-  keys.clear();
-  lastTap.w = lastTap.s = lastTap.ArrowUp = lastTap.ArrowDown = 0;
+  clearInputs();
+  updateTouchVisibility();
   stageElement.classList.toggle("paused", paused);
   if (!paused) {
     pausedAnimations.forEach((animation) => animation.play());
@@ -991,12 +1000,12 @@ function returnToTitleScreen() {
   clearInterval(continueInterval);
   continueInterval = null;
   continueDeadline = 0;
-  keys.clear();
-  lastTap.w = lastTap.s = lastTap.ArrowUp = lastTap.ArrowDown = 0;
+  clearInputs();
   sound.stopMatch();
   matchActive = false;
   matchOver = false;
   setPaused(false);
+  updateTouchVisibility();
   clearCombatEffects();
   victory = null;
   hitStop = 0;
@@ -1239,10 +1248,10 @@ function useSpecial(combatant) {
   return true;
 }
 
-function playerAttack(key) {
+function playerAttack(key, parryShortcut = false) {
   if (!player || !matchActive || player.stun > 0 || player.airborne || player.landingTime > 0) return;
-  const forward = player.facing === 1 ? "d" : "a";
-  if (key === "u" && keys.has(forward) && !player.attack && player.cooldown <= 0 &&
+  const forward = player.facing === 1 ? "right" : "left";
+  if (key === "u" && (parryShortcut || inputState.has(forward)) && !player.attack && player.cooldown <= 0 &&
       player.parryRecovery <= 0 && !player.input.chain.length && !player.input.queue.length) {
     player.parryTimer = 0.15;
     player.parryRecovery = 0.35;
@@ -1252,9 +1261,10 @@ function playerAttack(key) {
     clearComboInput(player.input);
     return;
   }
+  if (parryShortcut) return;
   if (player.parryTimer > 0) return;
-  bufferInput(player.input, key === "i" && (keys.has("s") || player.risingTimer > 0) ? "launcher" : key);
-  if (key === "i") player.risingTimer = 0;
+  bufferInput(player.input, key === "i" && (inputState.has("down") || player.risingTimer > 0) ? "launcher" : key);
+  if (key === "i" || key === "launcher") player.risingTimer = 0;
   consumeBufferedAttack(player);
 }
 
@@ -1412,6 +1422,8 @@ function finishMatch(winner, reason = "knockout") {
   if (matchOver) return;
   matchOver = true;
   matchActive = false;
+  clearInputs();
+  updateTouchVisibility();
   sound.stopMatch();
   if (reason === "knockout") sound.knockout();
   const loser = winner === player ? opponent : player;
@@ -1565,13 +1577,13 @@ function movePlayer(dt) {
   if (!player) return;
   if (opponent) player.facing = opponent.x >= player.x ? 1 : -1;
   let direction = 0;
-  if (keys.has("a") || keys.has("arrowleft")) direction -= 1;
-  if (keys.has("d") || keys.has("arrowright")) direction += 1;
+  if (inputState.has("left")) direction -= 1;
+  if (inputState.has("right")) direction += 1;
   const canGuard = !player.airborne && player.landingTime <= 0 && !player.attack &&
     player.parryTimer <= 0 && (player.stun <= 0 || player.blocking);
   const away = direction === -player.facing;
-  const lowGuard = keys.has("s") && (away || keys.has("shift"));
-  player.guardMode = canGuard && (away || keys.has("shift") || (direction === 0 && !keys.has("s"))) ?
+  const lowGuard = inputState.has("down") && (away || inputState.has("guard"));
+  player.guardMode = canGuard && (away || inputState.has("guard") || (direction === 0 && !inputState.has("down"))) ?
     (lowGuard ? "low" : "standing") : null;
   if (player.blockTimer > 0 && !player.airborne) player.guardMode = "standing";
   player.blocking = Boolean(player.guardMode);
@@ -2174,6 +2186,11 @@ function updateCamera(dt) {
 function animate() {
   requestAnimationFrame(animate);
   const elapsedFrame = clock.getDelta();
+  if (controllerNoticeUntil && performance.now() >= controllerNoticeUntil) {
+    controllerToast.classList.add("hidden");
+    controllerNoticeUntil = 0;
+  }
+  pollGamepads();
   if (isPaused) {
     renderer.render(scene, camera);
     return;
@@ -2197,11 +2214,103 @@ function navigateRoster(key) {
   selectFighter(fighters[next].id, true);
 }
 
+function updateTouchVisibility() {
+  const visible = touchEnabled && matchActive && !isPaused;
+  touchControls.classList.toggle("hidden", !visible);
+  rotatePrompt.classList.toggle("hidden", !visible || window.innerHeight <= window.innerWidth);
+  touchToggle.textContent = `TOUCH PAD: ${touchEnabled ? "ON" : "OFF"}`;
+  touchToggle.setAttribute("aria-pressed", String(touchEnabled));
+  document.body.classList.toggle("touch-enabled", touchEnabled);
+}
+
+function clearInputs() {
+  inputState.clear();
+  lastTap.up = lastTap.down = 0;
+  for (const { button } of touchPointers.values()) button.classList.remove("pressed");
+  touchPointers.clear();
+}
+
+function sidestep(action) {
+  if (!player || player.stun > 0 || player.airborne || player.landingTime > 0 || player.attack) return;
+  player.vz = (action === "up" ? -1 : 1) * 5.2;
+  player.dodgeTimer = 0.36;
+}
+
+function setInput(action, source, pressed, directSidestep = false) {
+  const change = inputState.set(action, source, pressed);
+  if (change.released && action === "down" && !isPaused && player?.guardMode === "low") player.risingTimer = 0.25;
+  if (!change.pressed) return;
+  if (action === "pause") {
+    if (matchActive || isPaused) setPaused(!isPaused);
+    return;
+  }
+  if (!matchActive || isPaused) return;
+  if (action === "up" || action === "down") {
+    const now = performance.now();
+    if (directSidestep || (lastTap[action] && now - lastTap[action] < 280)) {
+      sidestep(action);
+      lastTap[action] = 0;
+    } else lastTap[action] = now;
+  }
+  const attacks = { punchL: "u", punchR: "i", kickL: "j", kickR: "k", launcher: "launcher", special: "l" };
+  if (action === "parry") playerAttack("u", true);
+  if (attacks[action]) playerAttack(attacks[action]);
+}
+
+function handleGamepadMenu(action) {
+  const directions = { left: "ArrowLeft", right: "ArrowRight", up: "ArrowUp", down: "ArrowDown" };
+  const confirm = action === "kickL" || action === "pause";
+  if (!isPaused && !selectScreen.classList.contains("hidden")) {
+    if (directions[action]) navigateRoster(directions[action]);
+    else if (confirm) beginMatch();
+    return;
+  }
+  let buttons;
+  if (isPaused) buttons = [...pauseScreen.querySelectorAll("button")];
+  else if (!ladderScreen.classList.contains("hidden")) {
+    buttons = [document.querySelector("#next-stage-button"), document.querySelector("#change-fighter-button")];
+  } else if (!continueScreen.classList.contains("hidden")) {
+    buttons = [document.querySelector("#continue-button"), document.querySelector("#quit-button")];
+  } else if (!resultScreen.classList.contains("hidden")) {
+    buttons = [document.querySelector("#rematch-button")];
+  } else return;
+
+  const index = buttons.indexOf(document.activeElement);
+  if (directions[action]) {
+    const offset = action === "up" || action === "left" ? -1 : 1;
+    buttons[index < 0 ? 0 : (index + offset + buttons.length) % buttons.length].focus();
+  } else if (confirm) {
+    (buttons[index < 0 ? 0 : index]).click();
+  }
+}
+
+function pollGamepads() {
+  const current = new Map();
+  for (const pad of navigator.getGamepads?.() || []) {
+    if (!pad || pad.mapping !== "standard") continue;
+    for (const [action, pressed] of Object.entries(gamepadActions(pad))) {
+      const source = `gamepad:${pad.index}:${action}`;
+      if (pressed) current.set(source, action);
+    }
+  }
+  for (const [source, action] of gamepadPrevious) {
+    if (!current.has(source)) setInput(action, source, false);
+  }
+  for (const [source, action] of current) {
+    if (gamepadPrevious.has(source)) continue;
+    if (isPaused && action === "pause") setInput(action, source, true);
+    else if (isPaused || !matchActive) handleGamepadMenu(action);
+    else setInput(action, source, true);
+  }
+  gamepadPrevious.clear();
+  for (const [source, action] of current) gamepadPrevious.set(source, action);
+}
+
 window.addEventListener("keydown", (event) => {
   const key = event.key.startsWith("Arrow") ? event.key : event.key.toLowerCase();
   if ((key === "escape" || key === "p") && (matchActive || isPaused)) {
     event.preventDefault();
-    if (!event.repeat) setPaused(!isPaused);
+    if (!event.repeat) setInput("pause", `keyboard:${key}`, true);
     return;
   }
   if (isPaused) {
@@ -2220,7 +2329,7 @@ window.addEventListener("keydown", (event) => {
     }
     return;
   }
-  if (event.target === musicToggle) return;
+  if (event.target === musicToggle || event.target === touchToggle) return;
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) ||
       (event.key === " " && event.target !== document.querySelector("#quit-button") &&
         event.target !== document.querySelector("#change-fighter-button"))) event.preventDefault();
@@ -2256,28 +2365,51 @@ window.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (["a", "d", "w", "s", "shift", "arrowleft", "arrowright"].includes(key)) keys.add(key);
-  if (!event.repeat && (key === "w" || key === "s" || key === "ArrowUp" || key === "ArrowDown")) {
-    const previousKey = key === "ArrowUp" ? "w" : key === "ArrowDown" ? "s" : key;
-    const currentTime = performance.now();
-    const last = lastTap[previousKey] || 0;
-    if (currentTime - last < 280) {
-      if (player && player.stun <= 0 && !player.airborne && player.landingTime <= 0 && !player.attack) {
-        player.vz = (previousKey === "w" ? -1 : 1) * 5.2;
-        player.dodgeTimer = 0.36;
-      }
-      lastTap[previousKey] = 0;
-    } else lastTap[previousKey] = currentTime;
-  }
-  if (["u", "i", "j", "k", "l"].includes(key) && !event.repeat) playerAttack(key);
+  const action = keyboardActions[key.toLowerCase()];
+  if (action && !event.repeat) setInput(action, `keyboard:${key.toLowerCase()}`, true);
 });
 
 window.addEventListener("keyup", (event) => {
-  const key = event.key.startsWith("Arrow") ? event.key : event.key.toLowerCase();
-  if (!isPaused && key === "s" && player?.guardMode === "low") player.risingTimer = 0.25;
-  keys.delete(key);
+  const key = event.key.toLowerCase();
+  const action = keyboardActions[key];
+  if (action) setInput(action, `keyboard:${key}`, false);
 });
-window.addEventListener("blur", () => keys.clear());
+window.addEventListener("blur", clearInputs);
+window.addEventListener("gamepadconnected", () => {
+  controllerToast.textContent = "CONTROLLER CONNECTED - PRESS START";
+  controllerToast.classList.remove("hidden");
+  controllerNoticeUntil = performance.now() + 2500;
+});
+window.addEventListener("gamepaddisconnected", () => {
+  controllerToast.textContent = "CONTROLLER DISCONNECTED";
+  controllerToast.classList.remove("hidden");
+  controllerNoticeUntil = performance.now() + 2500;
+});
+window.addEventListener("resize", updateTouchVisibility);
+touchToggle.addEventListener("click", () => {
+  touchEnabled = !touchEnabled;
+  clearInputs();
+  updateTouchVisibility();
+});
+touchControls.addEventListener("pointerdown", (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button || !matchActive || isPaused || !touchEnabled) return;
+  event.preventDefault();
+  button.setPointerCapture(event.pointerId);
+  touchPointers.set(event.pointerId, { button, action: button.dataset.action });
+  button.classList.add("pressed");
+  setInput(button.dataset.action, `touch:${event.pointerId}`, true, true);
+});
+function releaseTouch(event) {
+  const entry = touchPointers.get(event.pointerId);
+  if (!entry) return;
+  touchPointers.delete(event.pointerId);
+  if (![...touchPointers.values()].some(({ button }) => button === entry.button)) entry.button.classList.remove("pressed");
+  setInput(entry.action, `touch:${event.pointerId}`, false);
+}
+touchControls.addEventListener("pointerup", releaseTouch);
+touchControls.addEventListener("pointercancel", releaseTouch);
+touchControls.addEventListener("lostpointercapture", releaseTouch);
 
 startButton.addEventListener("click", beginMatch);
 document.querySelector("#next-stage-button").addEventListener("click", startRound);
@@ -2311,4 +2443,5 @@ musicToggle.addEventListener("click", () => {
 
 createArena();
 buildRoster();
+updateTouchVisibility();
 animate();

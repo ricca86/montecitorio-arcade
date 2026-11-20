@@ -37,6 +37,16 @@ Then open <http://localhost:8000>. Three.js is bundled with the project, so no e
   to character select. Restart restores the score and streak from the start of
   the current stage.
 
+Touch devices show the virtual pad automatically; **Touch Pad: On/Off** also
+enables it on desktop. Hold directions while tapping limb buttons to guard,
+parry, or enter combos. Touch up/down once to sidestep; hold down and back to
+guard low. The Launch and Special buttons provide direct shortcuts. On standard
+gamepads, use the D-pad or left stick for movement, the four face buttons for
+limbs (left/top/bottom/right = LP/RP/LK/RK), L1 for parry, R1 for launcher,
+R2 for special, and Start for pause. Double-tap up/down on a gamepad to
+sidestep. Use directions and Cross to navigate menus; Start confirms selection
+and toggles pause during a match.
+
 Guards take 15% damage; unblockable moves bypass them. Hitting an opponent in
 attack startup deals 1.35× damage and adds 40 ms of hit-stop; a counter-hit
 knockdown launches instead. Later-stage opponents guard combos and punish whiffs.

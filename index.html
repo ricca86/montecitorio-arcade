@@ -30,6 +30,7 @@
           <span>Reload the page and check that your browser supports WebGL and has hardware acceleration enabled.</span>
         </div>
         <div id="hud" class="hud" aria-live="polite">
+          <button id="touch-toggle" class="music-toggle touch-toggle" type="button" aria-pressed="false">TOUCH PAD: OFF</button>
           <div class="combatant combatant-left">
             <div class="fighter-heading"><span class="player-tag">P1</span><strong id="player-name">—</strong></div>
             <div class="health-track"><span id="player-trail" class="health-trail"></span><span id="player-health" class="health-fill"></span></div>
@@ -53,6 +54,23 @@
           <strong>ELEZIONI!</strong>
         </div>
         <div id="callout-layer" class="callout-layer" aria-hidden="true"></div>
+        <div id="touch-controls" class="touch-controls hidden" aria-label="Touch arcade controls">
+          <div class="touch-dpad">
+            <button type="button" data-action="up" class="touch-up" aria-label="Sidestep in">▲<small>IN</small></button>
+            <button type="button" data-action="left" class="touch-left" aria-label="Move left">◀</button>
+            <button type="button" data-action="right" class="touch-right" aria-label="Move right">▶</button>
+            <button type="button" data-action="down" class="touch-down" aria-label="Sidestep out or crouch">▼<small>OUT</small></button>
+          </div>
+          <div class="touch-attacks">
+            <button type="button" data-action="launcher" class="touch-launch">LAUNCH</button>
+            <button type="button" data-action="special" class="touch-special">SPECIAL</button>
+            <button type="button" data-action="punchL" class="touch-lp" aria-label="Left punch">LP</button>
+            <button type="button" data-action="punchR" class="touch-rp" aria-label="Right punch">RP</button>
+            <button type="button" data-action="kickL" class="touch-lk" aria-label="Left kick">LK</button>
+            <button type="button" data-action="kickR" class="touch-rk" aria-label="Right kick">RK</button>
+          </div>
+        </div>
+        <div id="rotate-prompt" class="rotate-prompt hidden">↻ ROTATE TO LANDSCAPE FOR MORE ROOM</div>
 
         <section id="select-screen" class="select-screen">
           <div class="select-panel">
@@ -161,6 +179,7 @@
         </section>
 
         <aside class="signature-toast" id="signature-toast" aria-live="polite"></aside>
+        <aside class="controller-toast hidden" id="controller-toast" role="status" aria-live="polite"></aside>
       </section>
 
       <footer class="controls">

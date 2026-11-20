@@ -94,6 +94,8 @@ h1 span { color: #f3c7a8; }
   transition: opacity .25s ease;
 }
 .hud.active { opacity: 1; }
+.touch-toggle { position: absolute; top: 108px; left: 50%; padding: 5px 8px; transform: translateX(-50%); pointer-events: auto; }
+.hud:not(.active) .touch-toggle { visibility: hidden; }
 .combatant { min-width: 0; }
 .fighter-heading { justify-content: space-between; gap: 8px; margin-bottom: 5px; font: italic 900 clamp(14px, 1.8vw, 21px) Impact, "Arial Black", sans-serif; letter-spacing: .04em; text-transform: uppercase; }
 .fighter-heading strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #fff6cf; text-shadow: 2px 2px #601d21, -1px -1px #21151b, 0 3px 4px #000; }
@@ -136,6 +138,39 @@ h1 span { color: #f3c7a8; }
 .announcer strong { font: italic 900 clamp(28px, 5vw, 52px) Impact, "Arial Black", sans-serif; letter-spacing: .03em; text-shadow: 2px 3px #461018; }
 .announcer.show { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-2deg); }
 .callout-layer { position: absolute; inset: 0; z-index: 4; overflow: hidden; pointer-events: none; }
+.touch-controls { position: absolute; z-index: 4; inset: 0; pointer-events: none; user-select: none; -webkit-user-select: none; }
+.touch-dpad, .touch-attacks { position: absolute; bottom: 12px; width: 176px; height: 176px; }
+.touch-dpad { left: 12px; }
+.touch-attacks { right: 12px; }
+.touch-controls button { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 51px; height: 51px; padding: 0; border: 2px solid #fff3ccaa; border-radius: 50%; color: #fff7da; background: #281e31b8; box-shadow: 0 3px 0 #120c18aa, inset 0 1px #ffffff55; font: bold 15px "DM Mono", monospace; pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.touch-controls button.pressed { background: #c34e31d9; transform: translateY(2px); }
+.touch-controls small { font: bold 7px "DM Mono", monospace; }
+.touch-up { left: 62px; top: 15px; }
+.touch-left { left: 9px; top: 68px; }
+.touch-right { left: 115px; top: 68px; }
+.touch-down { left: 62px; top: 121px; }
+.touch-lp { left: 9px; top: 68px; }
+.touch-rp { left: 62px; top: 15px; }
+.touch-lk { left: 62px; top: 121px; }
+.touch-rk { left: 115px; top: 68px; }
+.touch-controls .touch-launch, .touch-controls .touch-special { top: -19px; width: 68px; height: 29px; border-radius: 14px; font-size: 9px; }
+.touch-launch { left: 4px; }
+.touch-special { right: 4px; }
+.rotate-prompt { position: absolute; z-index: 4; left: 50%; top: 145px; width: max-content; max-width: 90%; padding: 5px 8px; color: #fff1bd; background: #17121dcc; font: 9px "DM Mono", monospace; transform: translateX(-50%); pointer-events: none; }
+@media (max-width: 450px) {
+  .touch-dpad, .touch-attacks { transform: scale(.74); }
+  .touch-dpad { transform-origin: bottom left; }
+  .touch-attacks { transform-origin: bottom right; }
+}
+@media (orientation: landscape) and (max-height: 600px) {
+  body.touch-enabled .game-shell { padding: 4px 8px; }
+  body.touch-enabled .masthead { margin-bottom: 4px; }
+  body.touch-enabled .stage { min-height: 0; height: calc(100dvh - 57px); }
+  body.touch-enabled .controls, body.touch-enabled .disclaimer { display: none; }
+  body.touch-enabled .touch-dpad, body.touch-enabled .touch-attacks { bottom: 4px; transform: scale(.85); transform-origin: bottom; }
+  body.touch-enabled .touch-dpad { transform-origin: bottom left; }
+  body.touch-enabled .touch-attacks { transform-origin: bottom right; }
+}
 .comic-callout {
   position: absolute;
   color: #fff2a1;
@@ -281,6 +316,7 @@ h1 span { color: #f3c7a8; }
 .champion-subtitle { color: #ffe48c; font: italic 900 19px Impact, sans-serif; text-shadow: 1px 2px #882a1d; }
 .signature-toast { position: absolute; z-index: 3; right: 20px; bottom: 17px; padding: 8px 12px; border: 1px solid rgba(255,255,255,.25); border-radius: 5px; color: #fff3d4; background: rgba(26,19,32,.8); font: 500 9px "DM Mono", monospace; letter-spacing: .08em; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .signature-toast.show { opacity: 1; }
+.controller-toast { position: absolute; z-index: 8; top: 10px; left: 50%; max-width: 90%; padding: 8px 14px; border: 2px ridge #e2c47e; color: #fff0b0; background: linear-gradient(#763126, #241822); font: italic 900 14px Impact, sans-serif; text-align: center; transform: translateX(-50%) skewX(-5deg); pointer-events: none; }
 
 .controls { justify-content: space-between; gap: 14px; padding: 14px 5px 10px; flex-wrap: wrap; }
 .control-group { gap: 8px; color: #c2b9c9; font-size: 10px; }
@@ -297,6 +333,7 @@ kbd { display: inline-grid; place-items: center; min-width: 18px; height: 19px; 
   .round-clock strong { font-size: 25px; }
   .clock-label { font-size: 6px; }
   .pause-button { width: 108px; font-size: 9px; }
+  .touch-toggle { top: 93px; padding: 4px 6px; font-size: 9px; }
   .pause-lists { grid-template-columns: 1fr; gap: 0; }
   .pause-actions { justify-content: stretch; }
   .pause-actions button { flex: 1 1 100%; }
