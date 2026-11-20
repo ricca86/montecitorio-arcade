@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 import { difficultyForStage } from "../tournament.js";
+import { attackHeight } from "../defense.js";
 
 const source = await readFile(new URL("../game.js", import.meta.url), "utf8");
 const aiCode = source.slice(source.indexOf("function setAIState("), source.indexOf("function movePlayer("));
@@ -19,7 +20,7 @@ function setup(stage, randomValue) {
   };
   const player = { x: 0, y: 0, z: 0, health: 100, attack: null };
   const context = vm.createContext({
-    Math: math, opponent, player, clamp: (n, min, max) => Math.max(min, Math.min(max, n)),
+    Math: math, opponent, player, attackHeight, clamp: (n, min, max) => Math.max(min, Math.min(max, n)),
     random: (min, max) => (min + max) / 2,
     queueAttack: (_fighter, kind) => calls.push(kind),
     useSpecial: () => calls.push("special")
@@ -50,4 +51,32 @@ test("late AI punishes missed attacks with specials and does not punish connecte
   connected.player.attack = { high: true, hit: true, connected: true };
   connected.context.updateAI(0.04);
   assert.deepEqual(connected.calls, []);
+});
+
+test("stage four AI guards combo pressure and punishes heavy whiffs", () => {
+  const guarding = setup(3, 0.6);
+  guarding.player.input = { chain: ["u", "u"] };
+  guarding.player.attack = { height: "high", age: 0, windup: 0.1 };
+  guarding.opponent.aiState = "ATTACK";
+  guarding.context.updateAI(0.07);
+  assert.equal(guarding.opponent.guardMode, "standing");
+  assert.deepEqual(guarding.calls, []);
+
+  const punish = setup(3, 0.5);
+  punish.player.attack = { kind: "heavy", height: "mid", hit: true, connected: false };
+  punish.context.updateAI(0.07);
+  assert.deepEqual(punish.calls, ["punch"]);
+  const early = setup(1, 0.5);
+  early.player.attack = { kind: "heavy", height: "mid", hit: true, connected: false };
+  early.context.updateAI(0.07);
+  assert.deepEqual(early.calls, []);
+});
+
+test("stunned AI cannot move or start attacks", () => {
+  const { context, opponent, calls } = setup(6, 0);
+  opponent.stun = 0.6;
+  opponent.aiState = "APPROACH";
+  context.updateAI(0.1);
+  assert.equal(opponent.vx, undefined);
+  assert.deepEqual(calls, []);
 });

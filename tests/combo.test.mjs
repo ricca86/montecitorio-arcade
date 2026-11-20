@@ -4,11 +4,14 @@ import test from "node:test";
 import vm from "node:vm";
 import * as THREE from "../vendor/three/three.module.min.js";
 import * as combo from "../combo.js";
+import * as defense from "../defense.js";
 import { fighters } from "../fighters.js";
 
 const source = await readFile(new URL("../game.js", import.meta.url), "utf8");
 const combatCode = source.slice(source.indexOf("function attackDefinition("), source.indexOf("function finishMatch("));
 const updateCode = source.slice(source.indexOf("function updateCombatant("), source.indexOf("function updateBallots("));
+const movementCode = source.slice(source.indexOf("function movePlayer("), source.indexOf("function spawnSidestepGhost("));
+const projectileCode = source.slice(source.indexOf("function checkSingleProjectile("), source.indexOf("function updateParticles("));
 
 function setup() {
   const badge = () => ({ textContent: "", classList: { add() {}, remove() {} } });
@@ -16,15 +19,16 @@ function setup() {
   const fighter = (isPlayer) => ({
     definition: fighters[0], input: combo.createComboInput(), isPlayer,
     health: 100, x: isPlayer ? 0 : 1, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
-    facing: isPlayer ? 1 : -1, cooldown: 0, stun: 0, airborne: false,
+    facing: isPlayer ? 1 : -1, attack: null, cooldown: 0, stun: 0, airborne: false,
     landingTime: 0, dodgeTimer: 0, blocking: false, blockTimer: 0,
+    guardMode: null, parryTimer: 0, parryRecovery: 0, parryPose: 0, risingTimer: 0,
     reactionTime: 0, animationTime: 0, airRotation: 0,
     root: { position: { x: 0, set() {} }, scale: { x: 1 }, getObjectByName() { return null; } }
   });
   const player = fighter(true);
   const opponent = fighter(false);
   const context = vm.createContext({
-    THREE, ...combo, player, opponent, matchActive: true, hitStop: 0, shake: 0, cameraTilt: 0,
+    THREE, ...combo, ...defense, player, opponent, matchActive: true, hitStop: 0, shake: 0, cameraTilt: 0,
     keys: new Set(), document: { querySelector: (selector) => badges[selector] },
     sound: { swing() {}, impact() {} }, announceSpecial() {}, spawnBurst() {},
     spawnBallot() {}, spawnCallout() {}, spawnImpact() {}, updateHealthDisplay() {}, finishMatch() {},
@@ -32,7 +36,7 @@ function setup() {
     clamp: THREE.MathUtils.clamp, poseFighter() {}, spawnSidestepGhost() {},
     comicWords: ["TEST"], Math
   });
-  vm.runInContext(combatCode + updateCode, context);
+  vm.runInContext(combatCode + updateCode + movementCode + projectileCode, context);
   const tick = (dt) => {
     combo.advanceInputClock(player.input, dt);
     player.cooldown = Math.max(0, player.cooldown - dt);
@@ -161,4 +165,123 @@ test("launcher can reach four successive buffered air hits and resets on recover
   assert.match(fiveHitLabel, /^5 HIT COMBO! \d+ DAMAGE!$/);
   assert.equal(opponent.airborne, false);
   assert.equal(opponent.hitCombo, null);
+});
+
+test("neutral and facing-relative guard block correct heights and crouching ducks jabs", () => {
+  for (const facing of [1, -1]) {
+    const { context, player, opponent } = setup();
+    player.x = 0;
+    opponent.x = facing;
+    context.movePlayer(0.01);
+    assert.equal(player.guardMode, "standing");
+    const strike = (height, extra = {}) => {
+      opponent.attack = { kind: "punch", limb: "leftPunch", height, damage: 20, range: 2, age: 0.1, windup: 0.08, hit: false, ...extra };
+      context.tryHit(opponent, player);
+    };
+    strike("mid", { launch: true });
+    assert.equal(player.health, 97);
+    assert.equal(player.airborne, false);
+    player.stun = 0;
+    context.keys.add(facing === 1 ? "a" : "d");
+    context.keys.add("s");
+    context.movePlayer(0.01);
+    assert.equal(player.guardMode, "low");
+    strike("high");
+    assert.equal(player.health, 97);
+    strike("low");
+    assert.equal(player.health, 94);
+    player.stun = 0;
+    strike("mid");
+    assert.equal(player.health, 74);
+    assert.equal(player.guardMode, null);
+  }
+});
+
+test("forward parry window interrupts attacks for 0.6s but expires and preserves buffered strings", () => {
+  for (const facing of [1, -1]) {
+    const { context, player, opponent } = setup();
+    player.facing = facing;
+    opponent.facing = -facing;
+    context.keys.add(facing === 1 ? "d" : "a");
+    context.playerAttack("u");
+    assert.equal(player.attack, null);
+    assert.equal(player.parryTimer, 0.15);
+    context.updateCombatant(player, 0.149, opponent);
+    opponent.attack = { kind: "punch", height: "mid", damage: 10, range: 2, age: 0.1, windup: 0.08, hit: false };
+    context.tryHit(opponent, player);
+    assert.equal(player.health, 100);
+    assert.equal(opponent.attack, null);
+    assert.equal(opponent.stun, 0.6);
+  }
+  const { context, player, opponent } = setup();
+  context.keys.add("d");
+  context.playerAttack("u");
+  context.updateCombatant(player, 0.151, opponent);
+  opponent.attack = { kind: "punch", height: "mid", damage: 10, range: 2, age: 0.1, windup: 0.08, hit: false };
+  context.tryHit(opponent, player);
+  assert.equal(player.health, 90);
+  const comboCase = setup();
+  comboCase.context.playerAttack("u");
+  comboCase.context.keys.add("d");
+  comboCase.context.playerAttack("u");
+  assert.equal(comboCase.player.input.queue.length, 1);
+});
+
+test("releasing low guard permits a rising launcher without breaking S+I", () => {
+  const { context, player } = setup();
+  context.keys.add("a");
+  context.keys.add("s");
+  context.movePlayer(0.01);
+  const listeners = {};
+  context.window = { addEventListener: (type, callback) => { listeners[type] = callback; } };
+  const keyup = source.slice(source.indexOf('window.addEventListener("keyup"'), source.indexOf('window.addEventListener("blur"'));
+  vm.runInContext(keyup, context);
+  listeners.keyup({ key: "s" });
+  assert.equal(player.risingTimer, 0.25);
+  context.playerAttack("i");
+  assert.equal(player.attack.kind, "launcher");
+  assert.equal(player.risingTimer, 0);
+});
+
+test("counter-hits amplify startup damage and launch knockdowns, but not blocks or recovery", () => {
+  const { context, player, opponent } = setup();
+  opponent.attack = { age: 0.05, windup: 0.2, hit: false };
+  player.attack = { kind: "combo-finisher", height: "mid", damage: 20, range: 2, age: 0.1, windup: 0.08, hit: false, knockdown: true };
+  context.tryHit(player, opponent);
+  assert.equal(opponent.health, 73);
+  assert.equal(opponent.vy, 5.1);
+  assert.equal(context.hitStop, 0.1);
+  const block = setup();
+  block.opponent.guardMode = "standing";
+  block.opponent.attack = { age: 0.05, windup: 0.2, hit: false };
+  block.player.attack = { height: "mid", damage: 20, range: 2, age: 0.1, windup: 0.08, hit: false, knockdown: true };
+  block.context.tryHit(block.player, block.opponent);
+  assert.equal(block.opponent.health, 97);
+  assert.equal(block.opponent.airborne, false);
+  assert.equal(block.context.hitStop, 0.06);
+  const recovery = setup();
+  recovery.opponent.attack = { age: 0.2, windup: 0.2, hit: true };
+  recovery.player.attack = { height: "mid", damage: 20, range: 2, age: 0.1, windup: 0.08, hit: false };
+  recovery.context.tryHit(recovery.player, recovery.opponent);
+  assert.equal(recovery.opponent.health, 80);
+});
+
+test("sidestep iframes exclude specials and projectiles; projectile guards and unblockables resolve normally", () => {
+  const { context, player, opponent } = setup();
+  opponent.dodgeTimer = 0.2;
+  player.attack = { height: "mid", damage: 20, range: 2, age: 0.1, windup: 0.08, hit: false };
+  context.tryHit(player, opponent);
+  assert.equal(opponent.health, 100);
+  player.attack = { height: "mid", damage: 20, range: 2, age: 0.1, windup: 0.08, hit: false, special: true };
+  context.tryHit(player, opponent);
+  assert.equal(opponent.health, 80);
+  opponent.guardMode = "standing";
+  const projectile = (unblockable) => ({
+    owner: player, projectile: true, height: "mid", damage: 20, vx: 7, life: 1, unblockable,
+    mesh: { position: new THREE.Vector3(opponent.x, 1.1, opponent.z) }
+  });
+  context.checkSingleProjectile(projectile(false));
+  assert.equal(opponent.health, 77);
+  context.checkSingleProjectile(projectile(true));
+  assert.equal(opponent.health, 57);
 });
