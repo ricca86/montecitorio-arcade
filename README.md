@@ -3,6 +3,9 @@
 A small, static 3D arcade fighter built with Three.js and ES modules. No build step is required.
 Fighters are assembled procedurally from low-poly meshes and 64×64 nearest-filtered
 canvas textures; no external character models or texture assets are needed.
+Their accessories use spring follow-through, while sidesteps leave brief visual
+afterimages. Signature poses and jumps are visual only and do not change hit timing
+or movement rules.
 
 ## Run locally
 
