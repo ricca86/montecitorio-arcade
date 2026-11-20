@@ -216,14 +216,20 @@ function createArena() {
 
 function addGlasses(group) {
   for (const x of [-0.14, 0.14]) {
-    const lens = new THREE.Mesh(
+    const rim = new THREE.Mesh(
       new THREE.TorusGeometry(0.105, 0.018, 5, 12),
       material("#28272d", 0.36, 0.25)
     );
-    lens.position.set(x, 0.08, 0.38);
+    rim.position.set(x, 0.08, 0.44);
+    group.add(rim);
+    const lens = new THREE.Mesh(
+      new THREE.CircleGeometry(0.095, 8),
+      new THREE.MeshStandardMaterial({ color: "#b9dbe5", transparent: true, opacity: 0.2, depthWrite: false, flatShading: true })
+    );
+    lens.position.set(x, 0.08, 0.435);
     group.add(lens);
   }
-  addBox(group, [0.1, 0.026, 0.03], [0, 0.08, 0.39], "#29272b");
+  addBox(group, [0.1, 0.026, 0.03], [0, 0.08, 0.44], "#29272b");
 }
 
 function createProp(hand, fighter) {
@@ -318,6 +324,105 @@ function makeJoint(parent, name, position) {
   return joint;
 }
 
+function pixelTexture(definition, kind) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  const rect = (color, x, y, width, height) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, width, height);
+  };
+  if (kind === "face") {
+    const dark = definition.hair;
+    for (const x of [10, 39]) {
+      rect(dark, x, 14, 15, 3);
+      rect(dark, x + (x < 32 ? 10 : 0), 17, 5, 2);
+      rect("#fff5df", x + 1, 20, 13, 6);
+      rect("#302c30", x + 6, 20, 4, 6);
+      rect("#ffffff", x + 7, 20, 2, 2);
+    }
+    rect("#b67d68", 29, 34, 3, 5);
+    rect("#b67d68", 32, 38, 6, 2);
+    rect("#78443f", 23, 48, 18, 3);
+    rect("#9e5c52", 26, 51, 12, 2);
+    if (definition.beard) {
+      for (let y = 43; y < 62; y += 4) {
+        for (let x = 8 + (y % 8); x < 56; x += 6) {
+          if (y < 48 && x > 19 && x < 45) continue;
+          rect("#64473b", x, y, 2, 2);
+        }
+      }
+    } else if (["tajani", "bonelli", "calenda"].includes(definition.id)) {
+      for (const x of [8, 43]) {
+        rect("#bf8a75", x, 28, 12, 1);
+        rect("#bf8a75", x + 2, 31, 8, 1);
+      }
+    }
+  } else if (kind === "suit") {
+    rect(definition.suit, 0, 0, 64, 64);
+    for (let x = 2; x < 64; x += 8) rect("rgba(255,255,255,0.12)", x, 0, 1, 64);
+    rect("rgba(0,0,0,0.18)", 0, 0, 64, 4);
+    rect("rgba(0,0,0,0.14)", 0, 57, 64, 7);
+    rect("rgba(0,0,0,0.25)", 10, 38, 12, 2);
+    rect("rgba(0,0,0,0.25)", 42, 38, 12, 2);
+  } else if (kind === "shirt") {
+    rect("#f2eee4", 0, 0, 64, 64);
+    rect("#c9c4bc", 0, 0, 64, 7);
+    rect("#c9c4bc", 29, 0, 6, 64);
+    for (let y = 12; y < 64; y += 12) rect("#7f7b76", 31, y, 2, 2);
+  } else if (kind === "tie") {
+    rect(definition.tie, 0, 0, 64, 64);
+    for (let y = 0; y < 64; y += 12) {
+      for (let x = 0; x < 64; x += 4) rect("rgba(255,255,255,0.35)", x, (y + x) % 64, 4, 2);
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.name = `${definition.id}-${kind}`;
+  return texture;
+}
+
+function sculpt(parent, name, profile, position, color, scale = [1, 1, 1], map = null) {
+  const geometry = new THREE.LatheGeometry(profile.map(([radius, y]) => new THREE.Vector2(radius, y)), 8);
+  const surface = material(map ? "#ffffff" : color);
+  surface.map = map;
+  const mesh = new THREE.Mesh(geometry, surface);
+  mesh.name = name;
+  mesh.position.set(...position);
+  mesh.scale.set(...scale);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
+function panel(parent, name, points, position, color, depth = 0.025, map = null) {
+  const shape = new THREE.Shape();
+  points.forEach(([x, y], i) => i ? shape.lineTo(x, y) : shape.moveTo(x, y));
+  shape.closePath();
+  const surface = material(map ? "#ffffff" : color);
+  surface.map = map;
+  const mesh = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false }), surface);
+  mesh.name = name;
+  mesh.position.set(...position);
+  mesh.castShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
+function addFist(hand, color, side) {
+  sculpt(hand, "fist", [[0.08, -0.12], [0.12, -0.08], [0.13, 0.04], [0.1, 0.1]], [0, 0, 0], color, [1, 1, 0.85]);
+  for (let i = 0; i < 4; i += 1) {
+    addSphere(hand, 0.035, [-0.09 + i * 0.06, -0.07, 0.085], color, [1, 0.7, 0.7]);
+  }
+  const thumb = addSphere(hand, 0.06, [side * 0.11, 0.005, 0.06], color, [0.65, 1.4, 0.75]);
+  thumb.rotation.z = side * 0.55;
+  thumb.name = "thumb";
+}
+
 function addStarCuff(elbow) {
   addBox(elbow, [0.24, 0.1, 0.25], [0, -0.23, 0], "#f2eee4");
   const star = new THREE.Shape();
@@ -355,16 +460,44 @@ function buildFighterModel(definition, facing) {
   const leftKnee = makeJoint(leftHip, "leftKnee", [0, -0.37, 0]);
   const rightKnee = makeJoint(rightHip, "rightKnee", [0, -0.37, 0]);
   const joints = { hips, torso, head, leftShoulder, leftElbow, rightShoulder, rightElbow, leftHip, leftKnee, rightHip, rightKnee };
+  const clothing = [];
 
-  addBox(hips, [0.55, 0.22, 0.38], [0, 0, 0], "#34303b");
+  sculpt(hips, "pelvis", [[0.21, -0.11], [0.3, -0.07], [0.3, 0.1], [0.23, 0.13]], [0, 0, 0], "#34303b", [1, 1, 0.68]);
+  sculpt(hips, "belt", [[0.29, 0.04], [0.3, 0.1]], [0, 0, 0], "#29232a", [1, 1, 0.7]);
+  addBox(hips, [0.12, 0.075, 0.035], [0, 0.07, 0.22], "#c5a45f", { metalness: 0.65 });
   const shoulders = definition.id === "schlein" ? 0.91 : definition.id === "meloni" ? 0.73 : 0.84;
-  addBox(torso, [shoulders, 0.72, 0.45], [0, 0.38, 0], definition.suit);
-  addBox(torso, [0.23, 0.6, 0.035], [0, 0.37, 0.24], definition.tie);
-  addBox(torso, [0.28, 0.17, 0.035], [0, 0.67, 0.24], "#f2eee4");
+  sculpt(torso, "jacket", [[0.34, 0], [0.37, 0.12], [0.34, 0.4], [0.43, 0.64], [0.35, 0.73], [0.17, 0.76]],
+    [0, 0, 0], definition.suit, [shoulders / 0.86, 1, 0.58], pixelTexture(definition, "suit"));
+  const shirt = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.61), material("#ffffff"));
+  shirt.name = "shirt";
+  shirt.material.map = pixelTexture(definition, "shirt");
+  shirt.position.set(0, 0.39, 0.255);
+  torso.add(shirt);
+  const tie = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.46), material("#ffffff"));
+  tie.name = "tie";
+  tie.material.map = pixelTexture(definition, "tie");
+  tie.position.set(0, 0.4, 0.263);
+  torso.add(tie);
+  for (const side of [-1, 1]) {
+    panel(torso, "lapel", [[side * 0.1, 0.66], [side * 0.31, 0.73], [side * 0.27, 0.53], [side * 0.17, 0.48], [side * 0.08, 0.19]],
+      [0, 0, 0.25], definition.suit);
+    panel(torso, "collar", [[side * 0.08, 0.68], [side * 0.27, 0.75], [side * 0.2, 0.57]],
+      [0, 0, 0.28], "#e7e2da", 0.03);
+    const tail = makeJoint(torso, "coatTail", [side * 0.19, 0.1, -0.15]);
+    panel(tail, "coatTailPanel", [[-0.16, 0.03], [0.16, 0.03], [0.13, -0.28], [-0.14, -0.3]],
+      [0, 0, 0], definition.suit, 0.04);
+    clothing.push({ joint: tail, side, kind: "coat" });
+  }
   if (definition.id === "meloni") {
     ["#17965d", "#f7f1e4", "#d94c4c"].forEach((color, index) => {
       addBox(torso, [0.075, 0.88, 0.03], [(index - 1) * 0.065, 0.39, 0.27], color, { rotation: [0, 0, -0.55] });
     });
+    const sashEnd = makeJoint(torso, "sashEnd", [0.22, 0.07, 0.27]);
+    ["#17965d", "#f7f1e4", "#d94c4c"].forEach((color, index) => {
+      panel(sashEnd, "sashRibbon", [[index * 0.055 - 0.08, 0], [index * 0.055 - 0.025, 0], [index * 0.055, -0.35], [index * 0.055 - 0.055, -0.35]],
+        [0, 0, 0], color, 0.015);
+    });
+    clothing.push({ joint: sashEnd, side: 1, kind: "sash" });
   }
   if (definition.id === "salvini") {
     addBox(torso, [0.035, 0.66, 0.025], [0, 0.36, 0.25], "#afd0e3");
@@ -376,67 +509,93 @@ function buildFighterModel(definition, facing) {
   const upperColor = definition.id === "salvini" ? "#d8dfdf" : definition.suit;
   const forearmColor = definition.rolledSleeves ? definition.skin : upperColor;
   for (const [shoulder, elbow] of [[leftShoulder, leftElbow], [rightShoulder, rightElbow]]) {
-    addBox(shoulder, [0.25, 0.37, 0.29], [0, -0.17, 0], upperColor);
+    sculpt(shoulder, "upperSleeve", [[0.1, -0.35], [0.13, -0.27], [0.15, -0.08], [0.12, 0.02]], [0, 0, 0], upperColor);
     addSphere(shoulder, 0.13, [0, 0, 0], upperColor);
-    addBox(elbow, [0.21, 0.32, 0.23], [0, -0.16, 0], forearmColor);
-    if (definition.rolledSleeves) addBox(elbow, [0.25, 0.11, 0.26], [0, -0.02, 0], "#f1eee5");
+    sculpt(elbow, "forearm", [[0.075, -0.34], [0.1, -0.28], [0.13, -0.13], [0.11, 0.02]], [0, 0, 0], forearmColor);
+    sculpt(elbow, "cuff", [[0.11, -0.08], [0.13, -0.065], [0.13, 0.015], [0.11, 0.03]], [0, definition.rolledSleeves ? 0 : -0.25, 0], "#f1eee5");
     if (definition.id === "tajani") addStarCuff(elbow);
   }
   const leftHand = makeJoint(leftElbow, "leftHand", [0, -0.34, 0.02]);
   const rightHand = makeJoint(rightElbow, "rightHand", [0, -0.34, 0.02]);
-  addSphere(leftHand, 0.13, [0, 0, 0], definition.skin);
-  addSphere(rightHand, 0.13, [0, 0, 0], definition.skin);
+  addFist(leftHand, definition.skin, -1);
+  addFist(rightHand, definition.skin, 1);
 
   for (const [hip, knee] of [[leftHip, leftKnee], [rightHip, rightKnee]]) {
-    addBox(hip, [0.27, 0.4, 0.3], [0, -0.18, 0], "#34303b");
-    addSphere(hip, 0.14, [0, 0, 0], "#34303b");
-    addBox(knee, [0.23, 0.37, 0.26], [0, -0.18, 0], "#34303b");
-    addBox(knee, [0.3, 0.15, 0.42], [0, -0.36, 0.08], "#201e26");
+    sculpt(hip, "trouserThigh", [[0.115, -0.39], [0.13, -0.28], [0.15, -0.08], [0.14, 0.04]], [0, 0, 0], "#34303b", [1, 1, 1.05]);
+    sculpt(knee, "trouserShin", [[0.095, -0.34], [0.11, -0.26], [0.13, -0.1], [0.115, 0.02]], [0, 0, 0], "#34303b");
+    sculpt(knee, "trouserCuff", [[0.105, -0.34], [0.12, -0.32], [0.12, -0.27]], [0, 0, 0], "#282630");
+    sculpt(knee, "shoe", [[0.11, -0.44], [0.15, -0.42], [0.14, -0.36], [0.09, -0.31]], [0, 0, 0.07], "#201e26", [1, 1, 1.5]);
+    sculpt(knee, "sole", [[0.14, -0.46], [0.15, -0.42]], [0, 0, 0.07], "#111016", [1, 1, 1.5]);
+    addBox(knee, [0.2, 0.04, 0.14], [0, -0.46, -0.06], "#111016");
   }
 
-  addSphere(head, 0.46, [0, 0, 0], definition.skin, [0.9, 1.05, 0.88]);
+  sculpt(head, "head", [[0.08, -0.42], [0.22, -0.38], [0.32, -0.26], [0.4, -0.05], [0.4, 0.18], [0.33, 0.34], [0.15, 0.42], [0, 0.43]],
+    [0, 0, 0], definition.skin, [1, 1, 0.98]);
+  for (const side of [-1, 1]) {
+    addSphere(head, 0.09, [side * 0.39, -0.02, 0], definition.skin, [0.65, 1.3, 0.7]);
+    addSphere(head, 0.12, [side * 0.24, -0.1, 0.28], definition.skin, [1, 0.65, 0.55]);
+  }
+  const face = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.65, 0.6),
+    new THREE.MeshStandardMaterial({ map: pixelTexture(definition, "face"), transparent: true, alphaTest: 0.1, flatShading: true })
+  );
+  face.name = "face";
+  face.position.set(0, 0, 0.4);
+  head.add(face);
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.17, 4), material(definition.skin));
+  nose.name = "nose";
+  nose.position.set(0, -0.035, 0.43);
+  nose.rotation.x = Math.PI / 2;
+  head.add(nose);
   addSphere(head, 0.36, [0, 0.32, -0.04], definition.hair, [1.06, 0.48, 0.94]);
   if (definition.id === "meloni") {
-    addBox(head, [0.2, 0.53, 0.46], [-0.34, 0.05, -0.02], definition.hair, { rotation: [0, 0, -0.1] });
-    addBox(head, [0.2, 0.53, 0.46], [0.34, 0.05, -0.02], definition.hair, { rotation: [0, 0, 0.1] });
-    addBox(head, [0.48, 0.11, 0.15], [0, 0.28, 0.28], definition.hair, { rotation: [0, 0, -0.12] });
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 3; i += 1) {
+        const lock = addSphere(head, 0.19, [side * (0.32 + i * 0.025), 0.13 - i * 0.12, -0.02 + i * 0.05], definition.hair, [0.65, 1.1, 1.2]);
+        lock.rotation.z = side * 0.14;
+      }
+    }
+    const fringe = addSphere(head, 0.3, [-0.08, 0.28, 0.2], definition.hair, [1.05, 0.35, 0.6]);
+    fringe.rotation.z = -0.16;
   } else if (definition.wavyHair) {
-    for (let i = 0; i < 5; i += 1) {
-      addSphere(head, 0.16, [-0.27 + i * 0.135, 0.31 + (i % 2) * 0.05, 0.08], definition.hair, [1, 0.8, 0.8]);
+    for (let i = 0; i < 6; i += 1) {
+      addSphere(head, 0.17, [-0.33 + i * 0.13, 0.34 + (i % 2) * 0.06, 0.07], definition.hair, [0.85, 1, 0.85]);
     }
     for (const x of [-0.34, 0.34]) {
-      for (let i = 0; i < 3; i += 1) {
-        addSphere(head, 0.15, [x + (i % 2) * 0.04, 0.14 - i * 0.16, -0.04], definition.hair);
+      for (let i = 0; i < 4; i += 1) {
+        addSphere(head, 0.16, [x + Math.sign(x) * (i % 2) * 0.04, 0.15 - i * 0.14, -0.04], definition.hair, [0.85, 1.15, 0.85]);
       }
     }
   } else if (definition.slickHair) {
-    addSphere(head, 0.32, [0, 0.32, -0.1], definition.hair, [1.1, 0.7, 1]);
-    addBox(head, [0.6, 0.13, 0.38], [0, 0.29, -0.03], definition.hair, { rotation: [0.12, 0, 0] });
+    for (let i = 0; i < 4; i += 1) {
+      const lock = addSphere(head, 0.24, [-0.23 + i * 0.15, 0.4 + (i === 1 ? 0.08 : 0), 0.08], definition.hair, [0.6, 0.75, 1.3]);
+      lock.rotation.x = -0.35;
+    }
   } else if (definition.id === "renzi") {
-    addBox(head, [0.56, 0.17, 0.35], [0, 0.31, -0.02], definition.hair, { rotation: [0, 0, -0.1] });
+    const fringe = addSphere(head, 0.3, [0, 0.32, 0.08], definition.hair, [1, 0.45, 0.9]);
+    fringe.rotation.z = -0.1;
   }
-
-  for (const x of [-0.15, 0.15]) {
-    addSphere(head, 0.065, [x, 0.08, 0.39], "#fff8ec", [1, 1, 0.45]);
-    addSphere(head, 0.029, [x + 0.018, 0.08, 0.42], "#2c2830", [1, 1, 0.5]);
-    addBox(head, [0.14, 0.035, 0.03], [x, 0.18, 0.39], definition.hair, { rotation: [0, 0, definition.id === "meloni" ? Math.sign(x) * 0.18 : 0] });
-  }
-  addSphere(head, 0.07, [0, -0.03, 0.44], definition.skin, [0.8, 0.75, 0.7]);
-  addBox(head, [0.16, 0.035, 0.025], [0, -0.19, 0.41], "#8c4c4a");
 
   if (definition.beard) {
-    addSphere(head, 0.28, [0, -0.2, 0.13], definition.hair, [0.92, 0.56, 0.85]);
-    addBox(head, [0.42, 0.18, 0.14], [0, -0.14, 0.33], definition.hair);
+    for (const side of [-1, 1]) {
+      addSphere(head, 0.18, [side * 0.25, -0.23, 0.19], definition.hair, [0.6, 0.85, 0.7]);
+    }
+    addSphere(head, 0.18, [0, -0.36, 0.2], definition.hair, [1, 0.4, 0.8]);
   }
   if (definition.glasses) addGlasses(head);
   if (definition.scarf) {
-    addBox(torso, [0.72, 0.17, 0.5], [0, 0.74, 0.02], "#428555");
-    addBox(torso, [0.17, 0.62, 0.08], [-0.25, 0.58, -0.34], "#3e9257", { rotation: [-0.8, 0, -0.4] });
-    addBox(torso, [0.14, 0.46, 0.08], [-0.42, 0.48, -0.57], "#5ca565", { rotation: [-0.5, 0, -0.6] });
+    sculpt(torso, "scarfCollar", [[0.34, 0.68], [0.36, 0.78], [0.25, 0.81]], [0, 0, 0], "#428555", [1, 1, 0.75]);
+    for (const side of [-1, 1]) {
+      const scarfEnd = makeJoint(torso, "scarfEnd", [side * 0.2, 0.73, -0.24]);
+      panel(scarfEnd, "scarfPanel", [[-0.09, 0], [0.09, 0], [0.12, -0.55], [-0.07, -0.6]],
+        [0, 0, 0], side < 0 ? "#3e9257" : "#5ca565", 0.025);
+      scarfEnd.rotation.x = -0.4;
+      clothing.push({ joint: scarfEnd, side, kind: "scarf" });
+    }
   }
 
   const prop = createProp(rightHand, definition);
-  return { root, model, joints, leftHand, rightHand, prop };
+  return { root, model, joints, leftHand, rightHand, prop, clothing };
 }
 
 function createCombatant(definition, x, z, facing, isPlayer) {
@@ -1108,6 +1267,12 @@ function poseFighter(combatant, dt) {
   const recoil = clamp(combatant.reactionTime / 0.3, 0, 1);
   joints.torso.rotation.z += recoil * 0.55;
   joints.head.rotation.z += recoil * 0.2;
+  const action = attack ? Math.sin(clamp(attack.age / attack.duration, 0, 1) * Math.PI) : 0;
+  for (const { joint, side, kind } of combatant.clothing) {
+    const flutter = Math.sin(combatant.animationTime * 6.5 + side) * (0.04 + movement * 0.18 + action * 0.15);
+    joint.rotation.x = (kind === "scarf" ? -0.4 : 0) - movement * 0.25 - action * 0.2 + flutter;
+    joint.rotation.z = side * (0.08 + movement * 0.1) + flutter * 0.7;
+  }
   combatant.model.rotation.z = combatant.airRotation;
   combatant.model.position.y += Math.abs(Math.sin(combatant.airRotation)) * 0.38 * definition.height;
 }

@@ -12,15 +12,22 @@ const context = vm.createContext({
   clamp: THREE.MathUtils.clamp,
   tryHit() {},
   shake: 0,
+  scene: { remove() {} },
   document: {
-    createElement: () => ({
-      getContext: () => ({ fillRect() {}, fillText() {} })
-    })
+    createElement: () => {
+      const operations = [];
+      const ctx = {
+        fillRect(...args) { operations.push([this.fillStyle, ...args]); },
+        fillText() {}
+      };
+      return { operations, getContext: () => ctx };
+    }
   }
 });
 vm.runInContext([
   section("function material(", "function createArena("),
   section("function addGlasses(", "function createCombatant("),
+  section("function disposeFighter(", "function beginMatch("),
   section("function sampleKeyframes(", "function updateBallots(")
 ].join("\n"), context);
 
@@ -49,6 +56,62 @@ test("each roster member has articulated flat-shaded limbs and an attached prop"
     body.root.traverse((part) => {
       if (part.isMesh && part.material.isMeshStandardMaterial) assert.equal(part.material.flatShading, true);
     });
+  }
+});
+
+test("procedural fighters use crisp textures and sculpted anatomy", () => {
+  for (const definition of fighters) {
+    const body = combatant(definition);
+    for (const kind of ["face", "suit", "shirt", "tie"]) {
+      let texture;
+      body.root.traverse((part) => {
+        if (part.material?.map?.name === `${definition.id}-${kind}`) texture = part.material.map;
+      });
+      assert.ok(texture, `${definition.id} ${kind}`);
+      assert.equal(texture.image.width, 64);
+      assert.equal(texture.image.height, 64);
+      assert.equal(texture.magFilter, THREE.NearestFilter);
+      assert.equal(texture.minFilter, THREE.NearestFilter);
+      assert.equal(texture.generateMipmaps, false);
+      assert.ok(texture.image.operations.length > 4);
+    }
+    for (const name of ["head", "jacket", "forearm", "trouserThigh", "trouserShin", "shoe", "sole", "fist"]) {
+      let found = false;
+      body.root.traverse((part) => {
+        if (part.name === name && part.geometry?.type === "LatheGeometry") found = true;
+      });
+      assert.ok(found, `${definition.id} ${name}`);
+    }
+    assert.equal(body.root.getObjectByName("lapel").geometry.type, "ExtrudeGeometry");
+    assert.ok(body.leftHand.getObjectByName("thumb"));
+    assert.ok(body.rightHand.getObjectByName("thumb"));
+    if (definition.glasses) assert.ok(body.joints.head.children.some((part) => part.geometry?.type === "CircleGeometry"));
+    if (definition.rolledSleeves) assert.ok(body.joints.leftElbow.getObjectByName("cuff"));
+  }
+  const beard = context.pixelTexture(fighters.find((fighter) => fighter.beard), "face");
+  const wrinkles = context.pixelTexture(fighters.find((fighter) => fighter.id === "tajani"), "face");
+  assert.notDeepEqual(beard.image.operations, wrinkles.image.operations);
+});
+
+test("clothing reacts to motion and generated textures are disposed", () => {
+  for (const id of ["meloni", "bonelli"]) {
+    const body = combatant(fighters.find((fighter) => fighter.id === id));
+    const piece = body.clothing.find(({ kind }) => kind === (id === "meloni" ? "sash" : "scarf"));
+    assert.ok(piece);
+    context.poseFighter(body, 0);
+    const idle = piece.joint.rotation.x;
+    body.vx = 2.5;
+    body.attack = { age: 0.5, duration: 1, windup: 0.3, kind: "punch", limb: "leftPunch" };
+    context.poseFighter(body, 0);
+    assert.notEqual(piece.joint.rotation.x, idle);
+    const textures = [];
+    body.root.traverse((part) => {
+      if (part.material?.map) textures.push(part.material.map);
+    });
+    const disposed = [];
+    textures.forEach((texture) => texture.addEventListener("dispose", () => disposed.push(texture)));
+    context.disposeFighter(body);
+    assert.equal(disposed.length, textures.length);
   }
 });
 
