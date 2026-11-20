@@ -23,8 +23,8 @@
       <section class="stage" aria-label="Game arena">
         <div id="game-canvas" class="game-canvas"></div>
         <div id="engine-error" class="engine-error hidden" role="status">
-          <strong>Could not load the 3D engine.</strong>
-          <span>Check your internet connection and allow the Three.js CDN, then reload.</span>
+          <strong>Could not start the game.</strong>
+          <span>Reload the page and check that your browser supports WebGL and has hardware acceleration enabled.</span>
         </div>
         <div id="hud" class="hud" aria-live="polite">
           <div class="combatant combatant-left">
@@ -104,8 +104,12 @@
     </main>
     <script id="game-module" type="module" src="./game.js"></script>
     <script>
-      document.querySelector("#game-module").addEventListener("error", () => {
+      function showStartupError() {
         document.querySelector("#engine-error").classList.remove("hidden");
+      }
+      document.querySelector("#game-module").addEventListener("error", showStartupError);
+      window.addEventListener("error", () => {
+        if (!document.querySelector("#roster").children.length) showStartupError();
       });
     </script>
   </body>

@@ -10,7 +10,7 @@ From this directory, start a static server:
 python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000>. The browser needs internet access to load Three.js from jsDelivr.
+Then open <http://localhost:8000>. Three.js is bundled with the project, so no external CDN is needed.
 
 ## Controls
 
@@ -28,4 +28,4 @@ Pushes to `main` deploy the site to GitHub Pages using the workflow in `.github/
 ## License
 
 This project is licensed under the [GNU General Public License, version 3](LICENSE) (GPL-3.0-only).
-Three.js is loaded separately from a CDN and is distributed under its own MIT license.
+Three.js is distributed under its own [MIT license](vendor/three/LICENSE).
