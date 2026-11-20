@@ -5,6 +5,7 @@ import vm from "node:vm";
 import * as THREE from "../vendor/three/three.module.min.js";
 import * as combo from "../combo.js";
 import * as defense from "../defense.js";
+import { InputState, keyboardActions } from "../input.js";
 import { fighters } from "../fighters.js";
 
 const source = await readFile(new URL("../game.js", import.meta.url), "utf8");
@@ -27,16 +28,23 @@ function setup() {
   });
   const player = fighter(true);
   const opponent = fighter(false);
+  const inputState = new InputState();
+  const keys = {
+    add(key) { inputState.set(keyboardActions[key], `keyboard:${key}`, true); },
+    delete(key) { inputState.set(keyboardActions[key], `keyboard:${key}`, false); }
+  };
   const context = vm.createContext({
     THREE, ...combo, ...defense, player, opponent, matchActive: true, isPaused: false, hitStop: 0, shake: 0, cameraTilt: 0,
-    keys: new Set(), document: { querySelector: (selector) => badges[selector] },
+    keys, inputState, keyboardActions, lastTap: { up: 0, down: 0 }, performance,
+    document: { querySelector: (selector) => badges[selector] },
     sound: { swing() {}, impact() {} }, announceSpecial() {}, spawnBurst() {},
     spawnBallot() {}, spawnCallout() {}, spawnImpact() {}, updateHealthDisplay() {}, finishMatch() {},
     contactPoint: () => new THREE.Vector3(),
     clamp: THREE.MathUtils.clamp, poseFighter() {}, spawnSidestepGhost() {},
     comicWords: ["TEST"], Math
   });
-  vm.runInContext(combatCode + updateCode + movementCode + projectileCode, context);
+  vm.runInContext(combatCode + updateCode + movementCode + projectileCode +
+    source.slice(source.indexOf("function setInput("), source.indexOf("function pollGamepads(")), context);
   const tick = (dt) => {
     combo.advanceInputClock(player.input, dt);
     player.cooldown = Math.max(0, player.cooldown - dt);
@@ -91,6 +99,21 @@ test("buffered strings resolve to correct finishers without frame-perfect presse
     if (entry.kind === "launcher") assert.equal(player.attack.launch, true);
     if (entry.inputs[2] === "l") assert.equal(player.attack.special, true);
   }
+});
+
+test("touch and gamepad attacks use the same combo buffer and launcher as keyboard", () => {
+  const { context, player, tick } = setup();
+  for (const [action, source] of [["punchL", "touch:1"], ["punchL", "gamepad:0:punchL"], ["punchR", "touch:2"]]) {
+    context.setInput(action, source, true);
+    context.setInput(action, source, false);
+    tick(0.16);
+  }
+  assert.equal(player.attack.comboMove, "straight");
+
+  const launcher = setup();
+  launcher.context.setInput("launcher", "touch:9", true);
+  assert.equal(launcher.player.attack.kind, "launcher");
+  assert.equal(launcher.player.attack.launch, true);
 });
 
 test("rapid inputs drain in order and interruption discards queued follow-ups", () => {
@@ -225,6 +248,17 @@ test("forward parry window interrupts attacks for 0.6s but expires and preserves
   comboCase.context.keys.add("d");
   comboCase.context.playerAttack("u");
   assert.equal(comboCase.player.input.queue.length, 1);
+});
+
+test("gamepad parry shortcut uses the same timed parry without moving forward", () => {
+  const { context, player, opponent } = setup();
+  context.setInput("parry", "gamepad:0:parry", true);
+  assert.equal(player.parryTimer, 0.15);
+  assert.equal(context.inputState.has("right"), false);
+  opponent.attack = { kind: "punch", height: "mid", damage: 10, range: 2, age: 0.1, windup: 0.08, hit: false };
+  context.tryHit(opponent, player);
+  assert.equal(player.health, 100);
+  assert.equal(opponent.stun, 0.6);
 });
 
 test("releasing low guard permits a rising launcher without breaking S+I", () => {

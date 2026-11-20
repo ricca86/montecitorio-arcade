@@ -24,8 +24,9 @@ function node() {
 test("pause freezes simulation, hit-stop, camera and effects without stopping rendering", () => {
   const calls = [];
   const context = vm.createContext({
-    isPaused: true, hitStop: 0.1, clock: { getDelta: () => 0.02 },
+    isPaused: true, controllerNoticeUntil: 0, hitStop: 0.1, clock: { getDelta: () => 0.02 },
     requestAnimationFrame: () => calls.push("frame"),
+    pollGamepads() {},
     renderer: { render: () => calls.push("render") }, scene: {}, camera: {},
     update: () => calls.push("update"),
     updateCamera: () => calls.push("camera"),
@@ -57,6 +58,7 @@ test("pause clears held controls and restart restores the current match checkpoi
     matchActive: true, isPaused: false, pausedAnimations: [], player: { definition: { name: "Fighter", special: "Special" } },
     tournament, matchCheckpoint: { totalScore: 3000, winStreak: 2 },
     keys: new Set(["a", "s"]), lastTap: { w: 1, s: 2, ArrowUp: 0, ArrowDown: 0 },
+    clearInputs() { context.keys.clear(); }, updateTouchVisibility() {},
     pauseScreen: node(), stageElement, pauseButton: node(),
     document: { querySelector: get }, drawLadderPortrait() {},
     startRound() { starts += 1; }
@@ -110,6 +112,7 @@ test("return to title cancels timers and disposes fighters and combat effects", 
     ballots: [projectile], particles: [particle], impactEffects: [effect], callouts: [callout],
     clearSidestepGhosts() { disposed.push("ghosts"); },
     keys: new Set(["a"]), lastTap: { w: 1, s: 1 }, sound: { stopMatch() { disposed.push("music"); } },
+    clearInputs() { context.keys.clear(); }, updateTouchVisibility() {},
     matchActive: true, matchOver: true, isPaused: true, pausedAnimations: [], victory: {}, hitStop: 0.1, shake: 1, cameraTilt: 1,
     elapsed: 2, tournamentStartedAt: 123, matchCheckpoint: {}, tournament: {},
     fightersInMatch: [{ id: "p1" }, { id: "cpu" }], disposeFighter: (fighter) => disposed.push(fighter.id),
