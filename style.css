@@ -105,9 +105,11 @@ h1 span { color: #f3c7a8; }
 .health-trail { background: linear-gradient(180deg, #fff9a4, #ff5d13 40%, #d00917 85%); box-shadow: 0 0 10px #ff3522; transition: width .75s ease-out .2s; }
 .combatant-right .health-fill, .combatant-right .health-trail { right: 0; left: auto; }
 .health-caption { justify-content: space-between; margin-top: 5px; color: #fff2d6; font-size: 9px; font-weight: 500; text-shadow: 1px 1px #31000b, 0 2px 4px #000; }
-.round-clock { display: flex; flex-direction: column; align-items: center; justify-content: center; align-self: start; height: 70px; margin-top: 0; border: 3px ridge #d8dce2; border-radius: 0; background: linear-gradient(135deg, #626477, #181925 25%, #271019 70%, #8e332c); box-shadow: 0 3px 0 #17121c, 0 0 13px #d4523280; transform: skewX(-8deg); }
+.round-clock { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; align-self: start; height: 70px; margin-top: 0; border: 3px ridge #d8dce2; border-radius: 0; background: linear-gradient(135deg, #626477, #181925 25%, #271019 70%, #8e332c); box-shadow: 0 3px 0 #17121c, 0 0 13px #d4523280; transform: skewX(-8deg); }
 .clock-label { color: #ffdd87; font-size: 7px; }
 .round-clock strong { color: #fff5c3; font: italic 900 38px/.9 Impact, "Arial Black", sans-serif; text-shadow: 2px 2px #bc2d0b, 0 0 8px #f96434; }
+.pause-button { position: absolute; top: calc(100% + 6px); left: 50%; width: 130px; padding: 5px 4px; border: 2px ridge #d6bd82; color: #fff1bd; background: linear-gradient(#54434a, #1d1825); font: italic 900 10px Impact, sans-serif; transform: translateX(-50%); pointer-events: auto; cursor: pointer; }
+.hud:not(.active) .pause-button { visibility: hidden; }
 .combo-badge { position: absolute; z-index: 3; top: 28%; max-width: 40%; padding: 8px 12px; color: #fff3a0; border: 2px ridge #edb45e; background: linear-gradient(110deg, #6d1b20, #bd3b1b); font: italic 900 clamp(14px, 2.2vw, 26px) Impact, sans-serif; text-shadow: 2px 2px #53101b; pointer-events: none; }
 .combo-left { left: 18px; }
 .combo-right { right: 18px; text-align: right; }
@@ -142,6 +144,7 @@ h1 span { color: #f3c7a8; }
   white-space: nowrap;
   animation: pop-away .86s cubic-bezier(.15,.8,.25,1) forwards;
 }
+.stage.paused .comic-callout { animation-play-state: paused; }
 @keyframes pop-away {
   0% { opacity: 0; transform: translate(-50%, 10px) scale(.5) rotate(-7deg); }
   18% { opacity: 1; transform: translate(-50%, -4px) scale(1.16) rotate(3deg); }
@@ -251,6 +254,24 @@ h1 span { color: #f3c7a8; }
 .primary-button span { padding-left: 9px; font-size: 16px; }
 .primary-button:hover:not(:disabled) { transform: translateY(-2px); background: linear-gradient(#fff0a0, #ed772c 55%, #a0241c); }
 .primary-button:disabled { opacity: .44; cursor: not-allowed; }
+.secondary-button { min-height: 36px; padding: 5px 12px; border: 2px ridge #9c9eac; color: #fff1ce; background: linear-gradient(#514654, #211b2a); font: italic 900 12px Impact, "Arial Black", sans-serif; cursor: pointer; }
+.secondary-button:hover { border-color: #ffe36b; color: #ffe36b; }
+.challenger-panel .secondary-button { margin-top: 6px; }
+.pause-screen { position: absolute; z-index: 7; inset: 0; display: grid; place-items: center; padding: 14px; background: rgba(8, 8, 17, .86); }
+.pause-panel { width: min(840px, 100%); max-height: 100%; overflow: auto; padding: clamp(14px, 2.5vw, 24px); border: 4px ridge #c9c4c0; background: repeating-linear-gradient(0deg, #171620 0 3px, #1d1b28 4px 6px); box-shadow: 0 10px 0 #31131b, 0 20px 50px #000; }
+.pause-header { display: flex; align-items: center; gap: 16px; padding-bottom: 12px; border-bottom: 3px solid #a93c29; }
+.pause-header canvas { width: 66px; height: 77px; border: 3px ridge #e4c881; image-rendering: pixelated; }
+.pause-header h2 { margin: 0; color: #ffdb74; font: italic 900 clamp(25px, 4vw, 38px) Impact, sans-serif; text-shadow: 2px 2px #8f251e; }
+.pause-header strong { font: italic 900 16px Impact, sans-serif; text-transform: uppercase; }
+.pause-header p { margin: 4px 0 0; color: #c9bdc7; font-size: 11px; }
+.pause-lists { display: grid; grid-template-columns: 1fr 1.25fr; gap: 18px; }
+.pause-lists h3 { margin: 14px 0 8px; padding: 5px 9px; color: #fff0b7; background: linear-gradient(100deg, #a93625, #442332); font: italic 900 15px Impact, sans-serif; transform: skewX(-8deg); }
+.move-list { display: grid; gap: 4px; margin: 0; }
+.move-list div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 3px 10px; padding: 3px 5px; background: #ffffff08; font-size: 11px; }
+.move-list dt { color: #ffe29a; white-space: nowrap; }
+.move-list dd { margin: 0; color: #e4d8dc; }
+.move-list kbd { min-width: 22px; height: 22px; border-color: #a88b5d; border-radius: 0; color: #fff5d5; background: #54302c; font-weight: bold; }
+.pause-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .select-hint { margin: 12px 0 0; color: #897f90; font-size: 8px; text-align: center; }
 .hidden { display: none !important; }
 .result-screen { place-items: end start; background: linear-gradient(0deg, rgba(20, 12, 24, .45), transparent 50%); pointer-events: none; }
@@ -265,7 +286,7 @@ h1 span { color: #f3c7a8; }
 .control-group { gap: 8px; color: #c2b9c9; font-size: 10px; }
 .control-label { margin-right: 2px; color: var(--gold); font-size: 8px; }
 kbd { display: inline-grid; place-items: center; min-width: 18px; height: 19px; margin-right: 2px; padding: 0 4px; border: 1px solid #62566a; border-bottom-width: 2px; border-radius: 4px; color: #f7f0e5; background: #2a2331; font: 500 9px "DM Mono", monospace; }
-.fighter-card:focus-visible, .primary-button:focus-visible, .music-toggle:focus-visible, kbd:focus-visible { outline: 2px solid #fff0ab; outline-offset: 3px; }
+.fighter-card:focus-visible, .primary-button:focus-visible, .secondary-button:focus-visible, .pause-button:focus-visible, .music-toggle:focus-visible, kbd:focus-visible { outline: 2px solid #fff0ab; outline-offset: 3px; }
 .disclaimer { margin: 2px 5px 0; color: #716977; font-size: 8px; text-align: center; }
 
 @media (max-width: 700px) {
@@ -275,6 +296,10 @@ kbd { display: inline-grid; place-items: center; min-width: 18px; height: 19px; 
   .round-clock { height: 57px; }
   .round-clock strong { font-size: 25px; }
   .clock-label { font-size: 6px; }
+  .pause-button { width: 108px; font-size: 9px; }
+  .pause-lists { grid-template-columns: 1fr; gap: 0; }
+  .pause-actions { justify-content: stretch; }
+  .pause-actions button { flex: 1 1 100%; }
   .fighter-heading { font-size: 11px; }
   .health-caption { font-size: 7px; }
   .select-screen, .result-screen { padding: 10px; }

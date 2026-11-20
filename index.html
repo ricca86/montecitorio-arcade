@@ -38,6 +38,7 @@
           <div class="round-clock">
             <span class="clock-label" id="round-status">ROUND 1 · 0–0</span>
             <strong id="timer">60</strong>
+            <button id="pause-button" class="pause-button" type="button" aria-controls="pause-screen" aria-expanded="false">PAUSE / MOVES [ESC]</button>
           </div>
           <div class="combatant combatant-right">
             <div class="fighter-heading"><strong id="opponent-name">—</strong><span class="player-tag cpu-tag">CPU</span></div>
@@ -91,6 +92,7 @@
               </div>
               <p id="ladder-summary"></p>
               <button id="next-stage-button" class="primary-button">Fight now <span aria-hidden="true">↗</span></button>
+              <button id="change-fighter-button" class="secondary-button" type="button">← CHANGE FIGHTER</button>
               <p class="ladder-hint">AUTO-ADVANCE IN 3 SECONDS · ENTER / SPACE</p>
             </div>
           </div>
@@ -113,6 +115,48 @@
             <strong class="champion-subtitle">LANDSLIDE VICTORY!</strong>
             <p id="result-copy"></p>
             <button id="rematch-button" class="primary-button">Play again <span aria-hidden="true">↗</span></button>
+          </div>
+        </section>
+
+        <section id="pause-screen" class="pause-screen hidden" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+          <div class="pause-panel">
+            <header class="pause-header">
+              <canvas id="pause-portrait" width="96" height="112" aria-hidden="true"></canvas>
+              <div>
+                <span class="eyebrow">Command list · paused</span>
+                <h2 id="pause-title">PAUSE / MOVES</h2>
+                <strong id="pause-fighter-name"></strong>
+                <p id="pause-signature"></p>
+              </div>
+            </header>
+            <div class="pause-lists">
+              <section aria-labelledby="controls-title">
+                <h3 id="controls-title">UNIVERSAL CONTROLS</h3>
+                <dl class="move-list">
+                  <div><dt><kbd>A</kbd> / <kbd>D</kbd></dt><dd>Walk</dd></div>
+                  <div><dt><kbd>W</kbd><kbd>W</kbd> / <kbd>S</kbd><kbd>S</kbd></dt><dd>3D sidestep</dd></div>
+                  <div><dt>Hold back</dt><dd>Standing guard</dd></div>
+                  <div><dt><kbd>S</kbd> + back</dt><dd>Crouch guard</dd></div>
+                  <div><dt>Forward + <kbd>U</kbd></dt><dd>Timed parry</dd></div>
+                  <div><dt><kbd>S+I</kbd></dt><dd>Launcher</dd></div>
+                </dl>
+              </section>
+              <section aria-labelledby="combos-title">
+                <h3 id="combos-title">COMBO STRINGS</h3>
+                <dl class="move-list">
+                  <div><dt><kbd>U</kbd> → <kbd>U</kbd> → <kbd>I</kbd></dt><dd>1-2-Straight Knockdown</dd></div>
+                  <div><dt><kbd>U</kbd> → <kbd>I</kbd> → <kbd>K</kbd></dt><dd>Parliamentary Roundhouse</dd></div>
+                  <div><dt><kbd>J</kbd> → <kbd>K</kbd> → <kbd>K</kbd></dt><dd>Double Kick Filibuster</dd></div>
+                  <div><dt><kbd>U</kbd> → <kbd>U</kbd> → <kbd>S+I</kbd></dt><dd>Jab-to-Launcher Juggle Starter</dd></div>
+                  <div><dt><kbd>I</kbd> → <kbd>I</kbd> → <kbd>L</kbd></dt><dd>Signature Special Finisher</dd></div>
+                </dl>
+              </section>
+            </div>
+            <div class="pause-actions">
+              <button id="resume-button" class="primary-button" type="button">RESUME FIGHT</button>
+              <button id="restart-button" class="secondary-button" type="button">RESTART MATCH</button>
+              <button id="pause-quit-button" class="secondary-button" type="button">RETURN TO CHARACTER SELECT</button>
+            </div>
           </div>
         </section>
 
