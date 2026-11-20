@@ -26,6 +26,24 @@ Then open <http://localhost:8000>. Three.js is bundled with the project, so no e
 - `L`: signature move
 - Arrow keys and `Enter`: character select
 
+Attacks can be buffered for 300 ms. Combo strings: `U U I` (straight
+knockdown), `U I K` (spinning roundhouse), `J K K` (heel drop), `U U S+I`
+(launcher), and `I I L` (signature). Airborne opponents can be juggled with
+up to four gravity-assisted follow-up hits; the hit counter clears on recovery.
+
+## Elezioni 2027 Arcade Ladder
+
+Fight seven unique rivals followed by a stronger Palazzo Chigi boss: Meloni,
+or Schlein when playing as Meloni. Matches are best of three; each round win
+awards 1,000 points plus ten points per remaining health point. A loss after two
+rounds offers nine seconds to continue from the same stage with score and streak
+reset. Press Enter to continue or Escape to return to character select. Winning
+the final stage completes the tournament. A timer tie goes to the player.
+The ladder reveals each challenger as you progress and advances automatically
+after three seconds (or immediately with Enter or Space). The champion screen
+shows elapsed real time from character selection through the final win,
+including ladder screens and continues.
+
 Sound effects start after your first interaction. Use the **Music** button to
 toggle the optional synth-bass loop, which plays only during a match.
 
