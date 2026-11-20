@@ -24,3 +24,8 @@ Then open <http://localhost:8000>. The browser needs internet access to load Thr
 ## Publishing
 
 Pushes to `main` deploy the site to GitHub Pages using the workflow in `.github/workflows/pages.yml`.
+
+## License
+
+This project is licensed under the [GNU General Public License, version 3](LICENSE) (GPL-3.0-only).
+Three.js is loaded separately from a CDN and is distributed under its own MIT license.
