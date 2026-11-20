@@ -922,9 +922,15 @@ window.addEventListener("keydown", (event) => {
   if (!matchActive) {
     if (!selectScreen.classList.contains("hidden")) {
       if (key.startsWith("Arrow")) navigateRoster(key);
-      if (key === "Enter" && selectedId) beginMatch();
+      if (key === "enter" && selectedId) {
+        event.preventDefault();
+        beginMatch();
+      }
     }
-    if (matchOver && (key === "Enter" || key === " ")) resetToSelect();
+    if (matchOver && (key === "enter" || key === " ")) {
+      event.preventDefault();
+      resetToSelect();
+    }
     return;
   }
 
