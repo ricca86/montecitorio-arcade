@@ -105,9 +105,13 @@ function impact({ blocked = false, launch = false } = {}) {
   if (!context) return;
   if (launch && !blocked) {
     crash();
+  } else if (blocked) {
+    tone(1250, 980, 0.16, 0.2, "square");
+    tone(1820, 1380, 0.12, 0.1, "triangle");
+    noise(0.12, 0.24, 2400);
   } else {
-    tone(blocked ? 280 : 140, blocked ? 100 : 48, 0.16, blocked ? 0.25 : 0.46, "triangle");
-    noise(blocked ? 0.12 : 0.09, blocked ? 0.24 : 0.17, blocked ? 2400 : 800);
+    tone(140, 48, 0.16, 0.46, "triangle");
+    noise(0.09, 0.17, 800);
   }
 }
 

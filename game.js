@@ -3,6 +3,7 @@ import { fighters } from "./fighters.js";
 import { sound } from "./sound.js";
 import { TournamentManager, difficultyForStage, formatTournamentTime } from "./tournament.js";
 import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
+import { attackHeight, defenseOutcome, isCounterHit } from "./defense.js";
 
 const mount = document.querySelector("#game-canvas");
 const rosterNode = document.querySelector("#roster");
@@ -643,6 +644,11 @@ function createCombatant(definition, x, z, facing, isPlayer) {
     ghostTimer: 0,
     blockTimer: 0,
     blocking: false,
+    guardMode: null,
+    parryTimer: 0,
+    parryRecovery: 0,
+    parryPose: 0,
+    risingTimer: 0,
     stun: 0,
     animationTime: 0,
     reactionTime: 0,
@@ -997,6 +1003,7 @@ function spawnBallot(x, y, z, direction, color = "#f4ecd8", scale = 1, propertie
     special: properties.special,
     limb: properties.limb,
     high: properties.high,
+    height: properties.height,
     owner: properties.owner,
     color
   });
@@ -1020,8 +1027,8 @@ function spawnBurst(combatant, color = "#f4c96b", count = 12) {
   }
 }
 
-function spawnImpact(point, { launch = false, special = false, direction = 1 } = {}) {
-  const colors = special ? ["#ff3d42", "#ffba62"] :
+function spawnImpact(point, { launch = false, special = false, blocked = false, direction = 1 } = {}) {
+  const colors = blocked ? ["#51bfff", "#c5f5ff"] : special ? ["#ff3d42", "#ffba62"] :
     launch ? ["#5cbfff", "#b8ecff"] : ["#ff8b19", "#fff285"];
   const count = launch || special ? 18 : 12;
   for (let i = 0; i < count; i += 1) {
@@ -1095,6 +1102,8 @@ function attackDefinition(combatant, kind, extra = {}) {
     color: combatant.definition.color,
     ...extra
   };
+  base.height = extra.height || (extra.low ? "low" :
+    kind === "punch" && extra.limb === "leftPunch" ? "high" : "mid");
   base.windup = kind === "punch" ? 0.08 : Math.max(0.07, base.windup - fast * 0.012);
   return base;
 }
@@ -1107,6 +1116,7 @@ function queueAttack(combatant, kind, extra = {}) {
   combatant.attack = { ...attack, age: 0, hit: false };
   combatant.cooldown = attack.duration + 0.04;
   combatant.blocking = false;
+  combatant.guardMode = null;
   sound.swing(attack.limb === "leftKick" || attack.limb === "rightKick");
   return true;
 }
@@ -1145,7 +1155,20 @@ function useSpecial(combatant) {
 
 function playerAttack(key) {
   if (!player || !matchActive || player.stun > 0 || player.airborne || player.landingTime > 0) return;
-  bufferInput(player.input, key === "i" && keys.has("s") ? "launcher" : key);
+  const forward = player.facing === 1 ? "d" : "a";
+  if (key === "u" && keys.has(forward) && !player.attack && player.cooldown <= 0 &&
+      player.parryRecovery <= 0 && !player.input.chain.length && !player.input.queue.length) {
+    player.parryTimer = 0.15;
+    player.parryRecovery = 0.35;
+    player.parryPose = 0.2;
+    player.guardMode = null;
+    player.blocking = false;
+    clearComboInput(player.input);
+    return;
+  }
+  if (player.parryTimer > 0) return;
+  bufferInput(player.input, key === "i" && (keys.has("s") || player.risingTimer > 0) ? "launcher" : key);
+  if (key === "i") player.risingTimer = 0;
   consumeBufferedAttack(player);
 }
 
@@ -1170,9 +1193,9 @@ function consumeBufferedAttack(combatant) {
   } else if (code === "u-i-k" || code === "j-k-k") {
     queueAttack(combatant, "kick", { damage: 13, range: 1.55, knockdown: true, duration: 0.46, limb: "rightKick", comboMove: code === "u-i-k" ? "roundhouse" : "heel" });
   } else if (key === "u" || key === "i") {
-    queueAttack(combatant, "punch", { ...(key === "i" ? { damage: heavy ? 10 : 8, range: 1.18 } : {}), limb: key === "i" || cross ? "rightPunch" : "leftPunch" });
+    queueAttack(combatant, "punch", { ...(key === "i" ? { damage: heavy ? 10 : 8, range: 1.18 } : {}), height: key === "u" ? "high" : "mid", limb: key === "i" || cross ? "rightPunch" : "leftPunch" });
   } else {
-    queueAttack(combatant, "kick", { damage: snap ? 10 : 8, range: 1.4, low: !snap, limb: key === "j" ? "leftKick" : "rightKick" });
+    queueAttack(combatant, "kick", { damage: snap ? 10 : 8, range: 1.4, low: key === "j", limb: key === "j" ? "leftKick" : "rightKick" });
   }
 }
 
@@ -1228,46 +1251,75 @@ function tryHit(attacker, target) {
   }
   const dx = Math.abs(attacker.x - target.x);
   const dz = Math.abs(attacker.z - target.z);
-  const targetAirborne = target.airborne;
-  if (dx > attack.range || dz > 0.95 || (targetAirborne && target.y > 2.2)) return;
-  if (target.dodgeTimer > 0) {
-    spawnCallout("SCHIVATA!", target.x, target.y + 2.4, target.z);
+  if (dx > attack.range || dz > 0.95 || (target.airborne && target.y > 2.2)) return;
+  resolveCombatImpact(attacker, target, attack, contactPoint(attacker, target, attack));
+}
+
+function resolveCombatImpact(attacker, target, attack, point) {
+  const outcome = defenseOutcome(target, attack);
+  if (outcome === "sidestep" || outcome === "duck") {
+    spawnCallout(outcome === "duck" ? "SCHIVATA BASSA!" : "SCHIVATA!", target.x, target.y + 2.4, target.z);
+    return;
+  }
+  attack.connected = true;
+  if (outcome === "parry") {
+    target.parryTimer = 0;
+    target.parryPose = 0.25;
+    attacker.attack = null;
+    attacker.cooldown = 0;
+    attacker.stun = 0.6;
+    attacker.reactionTime = 0.6;
+    attacker.vx = -attacker.facing * 1.4;
+    if (attacker.input) clearComboInput(attacker.input);
+    spawnCallout("PARRIED! MOZIONE D'ORDINE!", target.x, target.y + 2.65, target.z);
+    spawnImpact(point, { blocked: true, direction: attacker.facing });
+    sound.impact({ blocked: true });
+    hitStop = Math.max(hitStop, 0.06);
     return;
   }
 
-  attack.connected = true;
-  let damage = attack.damage;
-  const blocked = target.blocking && !targetAirborne && attack.high && !attack.unblockable;
-  if (blocked) damage *= 0.18;
+  const direction = attack.projectile ? Math.sign(attack.vx) : attacker.facing;
+  const targetAirborne = target.airborne;
+  const blocked = outcome === "block";
+  const counter = !blocked && isCounterHit(target);
+  const damage = attack.damage * (blocked ? 0.15 : counter ? 1.35 : 1);
   recordCombatHit(attacker, target, damage, attack, blocked);
+  if (!blocked) {
+    target.guardMode = null;
+    target.blocking = false;
+    target.blockTimer = 0;
+    target.parryTimer = 0;
+  }
   target.stun = blocked ? 0.12 : 0.25;
   target.reactionTime = blocked ? 0.12 : 0.3;
-  target.vx = attacker.facing * (attack.knockdown ? 4.4 : attack.launch ? 0.8 : targetAirborne ? 0.15 : 2.2);
-  if (attack.launch && !targetAirborne) {
+  target.vx = direction * (blocked ? 0.5 : attack.knockdown ? 4.4 : attack.launch ? 0.8 : targetAirborne ? 0.15 : 2.2);
+  const launches = !blocked && (attack.launch || (counter && attack.knockdown));
+  if (launches && !targetAirborne) {
     target.vy = 5.1;
     target.airborne = true;
     target.juggle = { hits: 0 };
     target.landingTime = 0;
-  } else if (attack.knockdown && !targetAirborne) {
+  } else if (!blocked && attack.knockdown && !targetAirborne) {
     target.vy = 2.2;
     target.airborne = true;
     target.landingTime = 0;
   }
-  attacker.vx = targetAirborne ? 0 : -attacker.facing * 0.22;
-  hitStop = Math.max(hitStop, 0.06);
-  shake = Math.max(shake, attack.knockdown ? 0.38 : 0.22);
-  if (attack.launch || attack.knockdown || attack.kind === "heavy") {
-    cameraTilt = attacker.facing * (attack.launch ? 0.045 : 0.03);
+  if (!attack.projectile) attacker.vx = targetAirborne ? 0 : -direction * 0.22;
+  hitStop = Math.max(hitStop, counter ? 0.1 : 0.06);
+  shake = Math.max(shake, !blocked && attack.knockdown ? 0.38 : 0.22);
+  if (!blocked && (attack.launch || attack.knockdown || attack.kind === "heavy")) {
+    cameraTilt = direction * (attack.launch ? 0.045 : 0.03);
   }
-  spawnCallout(blocked ? "BLOCCATO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.65, target.z);
-  spawnImpact(contactPoint(attacker, target, attack), {
-    launch: attack.launch,
-    special: attack.special,
-    direction: attacker.facing
+  spawnCallout(blocked ? "BLOCCATO!" : counter ? "COUNTER HIT!" : attack.unblockable && attack.projectile ? "VETO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.65, target.z);
+  spawnImpact(point, {
+    launch: launches,
+    special: !blocked && attack.special,
+    blocked,
+    direction
   });
   updateHealthDisplay();
   if (target.health <= 0) finishMatch(attacker);
-  else sound.impact({ blocked, launch: attack.launch });
+  else sound.impact({ blocked, launch: launches });
 }
 
 function finishMatch(winner, reason = "knockout") {
@@ -1335,7 +1387,7 @@ function updateAI(dt) {
   if (!opponent || !player || opponent.health <= 0 || player.health <= 0) return;
   const ai = opponent;
   const difficulty = ai.difficulty;
-  if (ai.airborne || ai.landingTime > 0) return;
+  if (ai.airborne || ai.landingTime > 0 || ai.stun > 0) return;
   const dx = player.x - ai.x;
   const dz = player.z - ai.z;
   const distance = Math.abs(dx);
@@ -1346,7 +1398,8 @@ function updateAI(dt) {
   if (player.attack && ai.observedAttack !== player.attack) {
     ai.observedAttack = player.attack;
     ai.reactionTimer = difficulty.reaction;
-    ai.defense = player.attack.high && Math.random() < difficulty.block ? "block" :
+    const comboThreat = difficulty.stage >= 3 && (player.input?.chain.length >= 2 || player.attack.comboMove);
+    ai.defense = attackHeight(player.attack) !== "low" && Math.random() < (comboThreat ? Math.max(0.7, difficulty.block) : difficulty.block) ? "block" :
       (Math.random() < difficulty.sidestep ? "sidestep" : "none");
   }
   if (player.attack && ai.defense && ai.defense !== "none") {
@@ -1355,14 +1408,17 @@ function updateAI(dt) {
       if (ai.defense === "sidestep" && distance < 2.4 && !player.attack.special) {
         ai.dodgeTimer = 0.42;
         setAIState("SIDESTEP", 0.35);
-      } else if (ai.defense === "block" && player.attack.high) ai.blockTimer = 0.45;
+      } else if (ai.defense === "block" && attackHeight(player.attack) !== "low" && !ai.attack && ai.stun <= 0) ai.blockTimer = 0.45;
       ai.defense = "none";
     }
   }
 
-  if (difficulty.speed > 1 && player.attack?.hit && !player.attack.connected &&
+  const heavyWhiff = player.attack?.kind === "heavy" || player.attack?.kind === "launcher" ||
+    player.attack?.kind === "combo-finisher" || player.attack?.special || player.attack?.knockdown;
+  if ((difficulty.speed > 1 || (difficulty.stage >= 3 && heavyWhiff)) && player.attack?.hit && !player.attack.connected &&
       distance < 1.8 && ai.cooldown <= 0 && ai.stun <= 0 && ai.aiState !== "SIDESTEP") {
     ai.aiCombo = 0;
+    ai.blockTimer = 0;
     setAIState("ATTACK", difficulty.combo * 0.48);
   }
 
@@ -1383,7 +1439,7 @@ function updateAI(dt) {
       if (distance < 1.75) setAIState("ATTACK", difficulty.combo * 0.48 + difficulty.reaction);
       break;
     case "ATTACK":
-      if (ai.aiCombo < difficulty.combo && ai.cooldown <= 0 && ai.stun <= 0) {
+      if (ai.aiCombo < difficulty.combo && ai.cooldown <= 0 && ai.stun <= 0 && !(difficulty.stage >= 3 && ai.blockTimer > 0)) {
         const missed = player.attack && player.attack.hit && !player.attack.connected && distance < 1.8;
         if (difficulty.special && Math.random() < difficulty.special && (missed || ai.aiCombo > 0)) useSpecial(ai);
         else if (difficulty.launcher && Math.random() < difficulty.launcher && (missed || ai.aiCombo > 0)) {
@@ -1415,18 +1471,28 @@ function updateAI(dt) {
   }
 
   ai.blocking = ai.blockTimer > 0;
+  ai.guardMode = ai.blocking ? "standing" : null;
   if (distance > 1.7) ai.vz += clamp(dz, -1, 1) * 0.55;
 }
 
 function movePlayer(dt) {
-  if (!player || player.stun > 0 || player.airborne || player.landingTime > 0) return;
+  if (!player) return;
+  if (opponent) player.facing = opponent.x >= player.x ? 1 : -1;
   let direction = 0;
   if (keys.has("a") || keys.has("arrowleft")) direction -= 1;
   if (keys.has("d") || keys.has("arrowright")) direction += 1;
+  const canGuard = !player.airborne && player.landingTime <= 0 && !player.attack &&
+    player.parryTimer <= 0 && (player.stun <= 0 || player.blocking);
+  const away = direction === -player.facing;
+  const lowGuard = keys.has("s") && (away || keys.has("shift"));
+  player.guardMode = canGuard && (away || keys.has("shift") || (direction === 0 && !keys.has("s"))) ?
+    (lowGuard ? "low" : "standing") : null;
+  if (player.blockTimer > 0 && !player.airborne) player.guardMode = "standing";
+  player.blocking = Boolean(player.guardMode);
+  if (player.stun > 0 || player.airborne || player.landingTime > 0 || player.parryTimer > 0) return;
   if (direction) {
     player.vx += direction * player.definition.stats.speed * 0.38;
   }
-  player.blocking = keys.has("shift") || player.blockTimer > 0;
 }
 
 function spawnSidestepGhost(combatant) {
@@ -1525,6 +1591,16 @@ function poseFighter(combatant, dt, opponentBody = null) {
   joints.rightKnee.rotation.set(Math.max(0, step) * 0.4 + (bounce + 1) * 0.06, 0, -0.16);
   combatant.model.position.set(0, (bounce + 1) * 0.025, 0);
   combatant.prop.rotation.z = -2.2;
+  if (combatant.guardMode === "low") {
+    joints.leftKnee.rotation.x += 0.75;
+    joints.rightKnee.rotation.x += 0.75;
+    joints.torso.rotation.z -= 0.2;
+    combatant.model.position.y -= 0.25;
+  } else if (combatant.parryPose > 0) {
+    joints.leftShoulder.rotation.z = 1.9;
+    joints.leftElbow.rotation.z = 0.45;
+    joints.torso.rotation.y = 0.35;
+  }
 
   combatant.root.rotation.y = 0;
   if (sidestep) {
@@ -1728,8 +1804,14 @@ function updateCombatant(combatant, dt, opponentBody) {
   combatant.reactionTime = Math.max(0, combatant.reactionTime - dt);
   combatant.dodgeTimer = Math.max(0, combatant.dodgeTimer - dt);
   combatant.blockTimer = Math.max(0, combatant.blockTimer - dt);
-  if (!combatant.isPlayer && combatant.blockTimer <= 0) combatant.blocking = false;
-  if (combatant.isPlayer) combatant.blocking = keys.has("shift") || combatant.blockTimer > 0;
+  combatant.parryTimer = Math.max(0, (combatant.parryTimer || 0) - dt);
+  combatant.parryRecovery = Math.max(0, (combatant.parryRecovery || 0) - dt);
+  combatant.parryPose = Math.max(0, (combatant.parryPose || 0) - dt);
+  combatant.risingTimer = Math.max(0, (combatant.risingTimer || 0) - dt);
+  if (!combatant.isPlayer && combatant.blockTimer <= 0) {
+    combatant.blocking = false;
+    combatant.guardMode = null;
+  }
 
   if (combatant.attack) {
     combatant.attack.age += dt;
@@ -1825,32 +1907,10 @@ function checkSingleProjectile(ballot) {
   if (!source || !target) return;
   if (Math.abs(ballot.mesh.position.x - target.x) < 0.48 &&
       Math.abs(ballot.mesh.position.z - target.z) < 0.85 &&
-      Math.abs(ballot.mesh.position.y - target.y - 1.1) < 1.25 &&
-      target.dodgeTimer <= 0) {
+      Math.abs(ballot.mesh.position.y - target.y - 1.1) < 1.25) {
     ballot.hit = true;
     ballot.life = 0;
-    recordCombatHit(source, target, ballot.damage ?? 14, ballot);
-    target.stun = 0.22;
-    target.reactionTime = 0.3;
-    target.vx = Math.sign(ballot.vx) * 2.1;
-    if (ballot.launch && !target.airborne) {
-      target.vy = 4.6;
-      target.airborne = true;
-      target.juggle = { hits: 0 };
-      target.landingTime = 0;
-    }
-    spawnCallout(ballot.unblockable ? "VETO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.5, target.z);
-    spawnImpact(ballot.mesh.position, {
-      launch: ballot.launch,
-      special: ballot.special,
-      direction: Math.sign(ballot.vx)
-    });
-    hitStop = Math.max(hitStop, 0.06);
-    shake = 0.2;
-    if (ballot.launch) cameraTilt = Math.sign(ballot.vx) * 0.045;
-    updateHealthDisplay();
-    if (target.health <= 0) finishMatch(source);
-    else sound.impact({ launch: ballot.launch });
+    resolveCombatImpact(source, target, { ...ballot, damage: ballot.damage ?? 14 }, ballot.mesh.position);
   }
 }
 
@@ -2069,12 +2129,12 @@ window.addEventListener("keydown", (event) => {
   }
 
   if (["a", "d", "w", "s", "shift", "arrowleft", "arrowright"].includes(key)) keys.add(key);
-  if (key === "w" || key === "s" || key === "ArrowUp" || key === "ArrowDown") {
+  if (!event.repeat && (key === "w" || key === "s" || key === "ArrowUp" || key === "ArrowDown")) {
     const previousKey = key === "ArrowUp" ? "w" : key === "ArrowDown" ? "s" : key;
     const currentTime = performance.now();
     const last = lastTap[previousKey] || 0;
     if (currentTime - last < 280) {
-      if (player) {
+      if (player && player.stun <= 0 && !player.airborne && player.landingTime <= 0 && !player.attack) {
         player.vz = (previousKey === "w" ? -1 : 1) * 5.2;
         player.dodgeTimer = 0.36;
       }
@@ -2086,6 +2146,7 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keyup", (event) => {
   const key = event.key.startsWith("Arrow") ? event.key : event.key.toLowerCase();
+  if (key === "s" && player?.guardMode === "low") player.risingTimer = 0.25;
   keys.delete(key);
 });
 window.addEventListener("blur", () => keys.clear());

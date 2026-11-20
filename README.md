@@ -24,7 +24,18 @@ Then open <http://localhost:8000>. Three.js is bundled with the project, so no e
 - `U` / `I` / `J` / `K`: left punch, right punch, left kick, right kick
 - `S` + `I`: launcher
 - `L`: signature move
+- Neutral or hold away from the opponent: standing guard against high and mid attacks.
+  Hold `S` + away to guard lows and duck high jabs; press `I` within 250 ms of
+  releasing `S` for a rising launcher. `Shift` also guards (with `S` for low guard).
+- Forward + `U` from idle: parry a melee strike within 150 ms, stunning the attacker
+  for 0.6 seconds. This input takes priority over a jab; during an existing attack,
+  `U` remains a buffered combo input.
+- Sidesteps briefly evade linear melee attacks, not signature moves or projectiles.
 - Arrow keys and `Enter`: character select
+
+Guards take 15% damage; unblockable moves bypass them. Hitting an opponent in
+attack startup deals 1.35× damage and adds 40 ms of hit-stop; a counter-hit
+knockdown launches instead. Later-stage opponents guard combos and punish whiffs.
 
 Attacks can be buffered for 300 ms. Combo strings: `U U I` (straight
 knockdown), `U I K` (spinning roundhouse), `J K K` (heel drop), `U U S+I`
