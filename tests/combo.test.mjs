@@ -28,7 +28,7 @@ function setup() {
   const player = fighter(true);
   const opponent = fighter(false);
   const context = vm.createContext({
-    THREE, ...combo, ...defense, player, opponent, matchActive: true, hitStop: 0, shake: 0, cameraTilt: 0,
+    THREE, ...combo, ...defense, player, opponent, matchActive: true, isPaused: false, hitStop: 0, shake: 0, cameraTilt: 0,
     keys: new Set(), document: { querySelector: (selector) => badges[selector] },
     sound: { swing() {}, impact() {} }, announceSpecial() {}, spawnBurst() {},
     spawnBallot() {}, spawnCallout() {}, spawnImpact() {}, updateHealthDisplay() {}, finishMatch() {},

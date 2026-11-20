@@ -32,6 +32,10 @@ Then open <http://localhost:8000>. Three.js is bundled with the project, so no e
   `U` remains a buffered combo input.
 - Sidesteps briefly evade linear melee attacks, not signature moves or projectiles.
 - Arrow keys and `Enter`: character select
+- `Esc` / `P` or **Pause / Moves**: pause combat and view the move list.
+  The pause menu can resume, restart the current best-of-three match, or return
+  to character select. Restart restores the score and streak from the start of
+  the current stage.
 
 Guards take 15% damage; unblockable moves bypass them. Hitting an opponent in
 attack startup deals 1.35× damage and adds 40 ms of hit-stop; a counter-hit
@@ -53,7 +57,9 @@ the final stage completes the tournament. A timer tie goes to the player.
 The ladder reveals each challenger as you progress and advances automatically
 after three seconds (or immediately with Enter or Space). The champion screen
 shows elapsed real time from character selection through the final win,
-including ladder screens and continues.
+including ladder screens, pauses, and continues. Use **Change Fighter** on the
+ladder, or return to character select from the continue or champion screen, to
+start a new tournament.
 
 Sound effects start after your first interaction. Use the **Music** button to
 toggle the optional synth-bass loop, which plays only during a match.

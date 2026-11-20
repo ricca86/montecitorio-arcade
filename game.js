@@ -11,6 +11,9 @@ const selectScreen = document.querySelector("#select-screen");
 const resultScreen = document.querySelector("#result-screen");
 const ladderScreen = document.querySelector("#ladder-screen");
 const continueScreen = document.querySelector("#continue-screen");
+const pauseScreen = document.querySelector("#pause-screen");
+const pauseButton = document.querySelector("#pause-button");
+const stageElement = document.querySelector(".stage");
 const calloutLayer = document.querySelector("#callout-layer");
 const announcer = document.querySelector("#announcer");
 const toast = document.querySelector("#signature-toast");
@@ -62,6 +65,7 @@ const ballots = [];
 const particles = [];
 const impactEffects = [];
 const sidestepGhosts = [];
+const callouts = [];
 const comicWords = ["RIBALTONE!", "VETO!", "FIDUCIA!", "QUORUM!"];
 const cameraRig = new THREE.Vector3(0, 7.4, 17.4);
 const cameraTarget = new THREE.Vector3(0, 1.5, -0.5);
@@ -77,7 +81,9 @@ let ladderTimeout = null;
 let continueInterval = null;
 let continueDeadline = 0;
 let matchActive = false;
+let isPaused = false;
 let matchOver = false;
+let matchCheckpoint = null;
 let victory = null;
 let elapsed = 60;
 let hitStop = 0;
@@ -87,6 +93,8 @@ let toastTimer = 0;
 let bannerTimer = 0;
 let bannerPending = false;
 let nextBallot = 0;
+let announcerTimer = 0;
+let pausedAnimations = [];
 
 const clamp = THREE.MathUtils.clamp;
 const random = (min, max) => min + Math.random() * (max - min);
@@ -702,7 +710,7 @@ function selectFighter(id, focusCard = false) {
 function showAnnouncer() {
   announcer.querySelector("span").textContent = tournament.roundLabel;
   announcer.classList.add("show");
-  window.setTimeout(() => announcer.classList.remove("show"), 1700);
+  announcerTimer = 1.7;
 }
 
 function disposeFighter(combatant) {
@@ -808,6 +816,7 @@ function showLadder() {
   matchActive = false;
   victory = null;
   clearTimeout(ladderTimeout);
+  matchCheckpoint = { totalScore: tournament.totalScore, winStreak: tournament.winStreak };
   setStageMood(tournament.currentStage);
   document.querySelector("#hud").classList.remove("active");
   continueScreen.classList.add("hidden");
@@ -863,11 +872,33 @@ function clearProjectiles() {
   }
 }
 
+function clearCombatEffects() {
+  clearProjectiles();
+  clearSidestepGhosts();
+  for (const particle of particles) {
+    scene.remove(particle.mesh);
+    particle.mesh.geometry.dispose();
+    particle.mesh.material.dispose();
+  }
+  particles.length = 0;
+  for (const effect of impactEffects) {
+    scene.remove(effect.mesh);
+    effect.mesh.material.dispose();
+  }
+  impactEffects.length = 0;
+  for (const callout of callouts) callout.element.remove();
+  callouts.length = 0;
+  announcerTimer = 0;
+  announcer.classList.remove("show");
+  toastTimer = 0;
+  toast.classList.remove("show");
+}
+
 function startRound() {
   if (!tournament || matchActive) return;
   clearTimeout(ladderTimeout);
   ladderTimeout = null;
-  clearProjectiles();
+  clearCombatEffects();
   keys.clear();
   lastTap.w = lastTap.s = lastTap.ArrowUp = lastTap.ArrowDown = 0;
   sound.confirm();
@@ -915,22 +946,65 @@ function startRound() {
   toast.textContent = `SIGNATURE: ${player.definition.special.toUpperCase()}  ·  PRESS L`;
   updateHealthDisplay();
   showAnnouncer();
-  window.setTimeout(() => {
-    if (matchActive) announcer.classList.remove("show");
-  }, 1700);
 }
 
-function resetToSelect() {
+function setPaused(paused) {
+  if (paused && (!matchActive || !player)) return;
+  if (paused === isPaused) return;
+  if (paused) {
+    pausedAnimations = (stageElement.getAnimations?.({ subtree: true }) || [])
+      .filter((animation) => animation.playState === "running");
+    pausedAnimations.forEach((animation) => animation.pause());
+  }
+  isPaused = paused;
+  keys.clear();
+  lastTap.w = lastTap.s = lastTap.ArrowUp = lastTap.ArrowDown = 0;
+  stageElement.classList.toggle("paused", paused);
+  if (!paused) {
+    pausedAnimations.forEach((animation) => animation.play());
+    pausedAnimations = [];
+  }
+  pauseScreen.classList.toggle("hidden", !paused);
+  pauseButton.setAttribute("aria-expanded", String(paused));
+  if (paused) {
+    drawLadderPortrait(document.querySelector("#pause-portrait"), player.definition);
+    document.querySelector("#pause-fighter-name").textContent = player.definition.name;
+    document.querySelector("#pause-signature").textContent = `Signature: ${player.definition.special}`;
+    document.querySelector("#resume-button").focus();
+  } else if (matchActive) pauseButton.focus();
+}
+
+function restartMatch() {
+  if (!isPaused || !tournament || !matchCheckpoint) return;
+  tournament.roundWins = { player: 0, cpu: 0 };
+  tournament.totalScore = matchCheckpoint.totalScore;
+  tournament.winStreak = matchCheckpoint.winStreak;
+  matchActive = false;
+  setPaused(false);
+  startRound();
+  pauseButton.focus();
+}
+
+function returnToTitleScreen() {
   clearTimeout(ladderTimeout);
   ladderTimeout = null;
   clearInterval(continueInterval);
   continueInterval = null;
-  clearProjectiles();
+  continueDeadline = 0;
   keys.clear();
+  lastTap.w = lastTap.s = lastTap.ArrowUp = lastTap.ArrowDown = 0;
   sound.stopMatch();
   matchActive = false;
   matchOver = false;
+  setPaused(false);
+  clearCombatEffects();
   victory = null;
+  hitStop = 0;
+  shake = 0;
+  cameraTilt = 0;
+  elapsed = 60;
+  tournamentStartedAt = 0;
+  matchCheckpoint = null;
   resultScreen.classList.add("hidden");
   ladderScreen.classList.add("hidden");
   continueScreen.classList.add("hidden");
@@ -943,8 +1017,20 @@ function resetToSelect() {
   document.querySelector("#player-combo").classList.add("hidden");
   document.querySelector("#cpu-combo").classList.add("hidden");
   tournament = null;
-  setStageMood(0);
+  scene.background.set("#33243b");
+  scene.fog.color.set("#33243b");
+  ambientLight.color.set("#b5a5bf");
+  ambientLight.groundColor.set("#1a1424");
+  ambientLight.intensity = 0.7;
+  keyLight.color.set("#ffe1a0");
+  keyLight.intensity = 190;
+  rimLight.color.set("#788fce");
+  cameraRig.set(0, 7.4, 17.4);
+  cameraTarget.set(0, 1.5, -0.5);
+  camera.position.copy(cameraRig);
+  camera.lookAt(cameraTarget);
   buildRoster();
+  rosterNode.querySelector(".selected").focus();
 }
 
 function updateHealthDisplay() {
@@ -977,7 +1063,7 @@ function spawnCallout(text, x, y, z) {
   element.style.left = `${(point.x * 0.5 + 0.5) * rect.width}px`;
   element.style.top = `${(-point.y * 0.5 + 0.5) * rect.height}px`;
   calloutLayer.appendChild(element);
-  window.setTimeout(() => element.remove(), 950);
+  callouts.push({ element, life: 0.95 });
 }
 
 function spawnBallot(x, y, z, direction, color = "#f4ecd8", scale = 1, properties = {}) {
@@ -1342,7 +1428,7 @@ function showContinue() {
   const tick = () => {
     const remaining = Math.max(0, Math.ceil((continueDeadline - Date.now()) / 1000));
     document.querySelector("#continue-count").textContent = remaining;
-    if (remaining === 0) resetToSelect();
+    if (remaining === 0) returnToTitleScreen();
   };
   tick();
   continueInterval = setInterval(tick, 100);
@@ -1352,7 +1438,7 @@ function showContinue() {
 function retryStage() {
   if (continueScreen.classList.contains("hidden")) return;
   if (Date.now() >= continueDeadline) {
-    resetToSelect();
+    returnToTitleScreen();
     return;
   }
   clearInterval(continueInterval);
@@ -2028,6 +2114,17 @@ function update(dt) {
   updateBallots(dt);
   updateParticles(dt);
   updateSidestepGhosts(dt);
+  for (let i = callouts.length - 1; i >= 0; i -= 1) {
+    callouts[i].life -= dt;
+    if (callouts[i].life <= 0) {
+      callouts[i].element.remove();
+      callouts.splice(i, 1);
+    }
+  }
+  if (announcerTimer > 0) {
+    announcerTimer -= dt;
+    if (announcerTimer <= 0) announcer.classList.remove("show");
+  }
   toastTimer -= dt;
   if (toastTimer <= 0) toast.classList.remove("show");
 }
@@ -2056,7 +2153,9 @@ function updateCamera(dt) {
   }
   if (!desired) {
     const lateStage = tournament && tournament.currentStage >= 6;
-    desired = new THREE.Vector3(focus.x + (lateStage ? 0.5 : 0), focus.y + distance * (lateStage ? 0.22 : 0.3), focus.z + distance);
+    desired = !tournament
+      ? new THREE.Vector3(0, 7.4, 17.4)
+      : new THREE.Vector3(focus.x + (lateStage ? 0.5 : 0), focus.y + distance * (lateStage ? 0.22 : 0.3), focus.z + distance);
   }
   const smoothing = 1 - Math.exp(-3.5 * dt);
   cameraRig.lerp(desired, smoothing);
@@ -2075,6 +2174,10 @@ function updateCamera(dt) {
 function animate() {
   requestAnimationFrame(animate);
   const elapsedFrame = clock.getDelta();
+  if (isPaused) {
+    renderer.render(scene, camera);
+    return;
+  }
   const frozen = Math.min(hitStop, elapsedFrame);
   hitStop -= frozen;
   update(Math.min(elapsedFrame - frozen, 0.04));
@@ -2095,19 +2198,44 @@ function navigateRoster(key) {
 }
 
 window.addEventListener("keydown", (event) => {
-  if (event.target === musicToggle) return;
   const key = event.key.startsWith("Arrow") ? event.key : event.key.toLowerCase();
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(event.key)) event.preventDefault();
+  if ((key === "escape" || key === "p") && (matchActive || isPaused)) {
+    event.preventDefault();
+    if (!event.repeat) setPaused(!isPaused);
+    return;
+  }
+  if (isPaused) {
+    if (key === "tab") {
+      const buttons = [...pauseScreen.querySelectorAll("button")];
+      if (!buttons.includes(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? buttons[buttons.length - 1] : buttons[0]).focus();
+      } else if (event.shiftKey && document.activeElement === buttons[0]) {
+        event.preventDefault();
+        buttons[buttons.length - 1].focus();
+      } else if (!event.shiftKey && document.activeElement === buttons[buttons.length - 1]) {
+        event.preventDefault();
+        buttons[0].focus();
+      }
+    }
+    return;
+  }
+  if (event.target === musicToggle) return;
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) ||
+      (event.key === " " && event.target !== document.querySelector("#quit-button") &&
+        event.target !== document.querySelector("#change-fighter-button"))) event.preventDefault();
 
   if (!matchActive) {
     if (!continueScreen.classList.contains("hidden")) {
+      if (event.target === document.querySelector("#quit-button") && (key === "enter" || key === " ")) return;
       if (key === "enter" || key === " ") {
         event.preventDefault();
         retryStage();
-      } else if (key === "escape") resetToSelect();
+      } else if (key === "escape") returnToTitleScreen();
       return;
     }
     if (!ladderScreen.classList.contains("hidden")) {
+      if (event.target === document.querySelector("#change-fighter-button")) return;
       if (key === "enter" || key === " ") {
         event.preventDefault();
         startRound();
@@ -2123,7 +2251,7 @@ window.addEventListener("keydown", (event) => {
     }
     if (!resultScreen.classList.contains("hidden") && (key === "enter" || key === " ")) {
       event.preventDefault();
-      resetToSelect();
+      returnToTitleScreen();
     }
     return;
   }
@@ -2146,7 +2274,7 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keyup", (event) => {
   const key = event.key.startsWith("Arrow") ? event.key : event.key.toLowerCase();
-  if (key === "s" && player?.guardMode === "low") player.risingTimer = 0.25;
+  if (!isPaused && key === "s" && player?.guardMode === "low") player.risingTimer = 0.25;
   keys.delete(key);
 });
 window.addEventListener("blur", () => keys.clear());
@@ -2154,8 +2282,13 @@ window.addEventListener("blur", () => keys.clear());
 startButton.addEventListener("click", beginMatch);
 document.querySelector("#next-stage-button").addEventListener("click", startRound);
 document.querySelector("#continue-button").addEventListener("click", retryStage);
-document.querySelector("#quit-button").addEventListener("click", resetToSelect);
-document.querySelector("#rematch-button").addEventListener("click", resetToSelect);
+document.querySelector("#quit-button").addEventListener("click", returnToTitleScreen);
+document.querySelector("#rematch-button").addEventListener("click", returnToTitleScreen);
+document.querySelector("#change-fighter-button").addEventListener("click", returnToTitleScreen);
+pauseButton.addEventListener("click", () => setPaused(true));
+document.querySelector("#resume-button").addEventListener("click", () => setPaused(false));
+document.querySelector("#restart-button").addEventListener("click", restartMatch);
+document.querySelector("#pause-quit-button").addEventListener("click", returnToTitleScreen);
 
 if (!sound.available) {
   musicToggle.disabled = true;
