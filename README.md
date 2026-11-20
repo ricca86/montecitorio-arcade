@@ -21,6 +21,9 @@ Then open <http://localhost:8000>. Three.js is bundled with the project, so no e
 - `L`: signature move
 - Arrow keys and `Enter`: character select
 
+Sound effects start after your first interaction. Use the **Music** button to
+toggle the optional synth-bass loop, which plays only during a match.
+
 ## Publishing
 
 Pushes to `main` deploy the site to GitHub Pages using the workflow in `.github/workflows/pages.yml`.

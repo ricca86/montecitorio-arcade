@@ -60,6 +60,10 @@ h1 { margin: 0; font: 700 clamp(18px, 2vw, 24px) "Space Grotesk", sans-serif; le
 h1 span { color: #f3c7a8; }
 .edition { margin: 0; color: #a89eae; font-size: 10px; }
 .edition span { color: var(--coral); padding: 0 5px; }
+.header-actions { display: flex; align-items: center; gap: 16px; }
+.music-toggle { flex: none; padding: 7px 10px; border: 2px ridge #bdc3cf; color: #fff3d4; background: linear-gradient(#555461, #211b2b); font: italic 900 11px Impact, "Arial Black", sans-serif; text-transform: uppercase; cursor: pointer; }
+.music-toggle[aria-pressed="true"] { border-color: #ffe36b; color: #ffe36b; }
+.music-toggle:disabled { opacity: .5; cursor: not-allowed; }
 
 .stage {
   position: relative;
@@ -232,7 +236,7 @@ h1 span { color: #f3c7a8; }
 .control-group { gap: 8px; color: #c2b9c9; font-size: 10px; }
 .control-label { margin-right: 2px; color: var(--gold); font-size: 8px; }
 kbd { display: inline-grid; place-items: center; min-width: 18px; height: 19px; margin-right: 2px; padding: 0 4px; border: 1px solid #62566a; border-bottom-width: 2px; border-radius: 4px; color: #f7f0e5; background: #2a2331; font: 500 9px "DM Mono", monospace; }
-.fighter-card:focus-visible, .primary-button:focus-visible, kbd:focus-visible { outline: 2px solid #fff0ab; outline-offset: 3px; }
+.fighter-card:focus-visible, .primary-button:focus-visible, .music-toggle:focus-visible, kbd:focus-visible { outline: 2px solid #fff0ab; outline-offset: 3px; }
 .disclaimer { margin: 2px 5px 0; color: #716977; font-size: 8px; text-align: center; }
 
 @media (max-width: 700px) {
@@ -262,6 +266,10 @@ kbd { display: inline-grid; place-items: center; min-width: 18px; height: 19px; 
 }
 
 @media (max-width: 390px) {
+  .brand { gap: 8px; }
+  .brand-mark { width: 36px; height: 36px; font-size: 21px; }
+  .brand h1 { font-size: 16px; }
+  .music-toggle { padding: 6px; font-size: 10px; }
   .stage { min-height: 590px; }
   .control-group { width: 100%; }
   .select-footer { align-items: stretch; flex-direction: column; }

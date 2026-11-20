@@ -1,5 +1,6 @@
 import * as THREE from "./vendor/three/three.module.min.js";
 import { fighters } from "./fighters.js";
+import { sound } from "./sound.js";
 
 const mount = document.querySelector("#game-canvas");
 const rosterNode = document.querySelector("#roster");
@@ -9,6 +10,7 @@ const calloutLayer = document.querySelector("#callout-layer");
 const announcer = document.querySelector("#announcer");
 const toast = document.querySelector("#signature-toast");
 const startButton = document.querySelector("#start-button");
+const musicToggle = document.querySelector("#music-toggle");
 const playerHealthNode = document.querySelector("#player-health");
 const opponentHealthNode = document.querySelector("#opponent-health");
 const playerTrailNode = document.querySelector("#player-trail");
@@ -458,6 +460,7 @@ function selectFighter(id, focusCard = false) {
   selectedId = id;
   const fighter = fightersById.get(id);
   if (!fighter) return;
+  if (focusCard) sound.select();
   [...rosterNode.children].forEach((card, index) => {
     const selected = fighters[index].id === id;
     card.classList.toggle("selected", selected);
@@ -486,6 +489,8 @@ function disposeFighter(combatant) {
 
 function beginMatch() {
   if (!selectedId || matchActive) return;
+  sound.confirm();
+  sound.startMatch();
   if (fightersInMatch.length) {
     fightersInMatch.forEach(disposeFighter);
     fightersInMatch.length = 0;
@@ -520,6 +525,7 @@ function beginMatch() {
 }
 
 function resetToSelect() {
+  sound.stopMatch();
   matchActive = false;
   matchOver = false;
   victory = null;
@@ -695,6 +701,7 @@ function queueAttack(combatant, kind, extra = {}) {
   combatant.attack = { ...attack, age: 0, hit: false };
   combatant.cooldown = attack.duration + 0.04;
   combatant.blocking = false;
+  sound.swing(attack.limb === "leftKick" || attack.limb === "rightKick");
 }
 
 function getSpecial(combatant) {
@@ -803,13 +810,16 @@ function tryHit(attacker, target) {
   });
   updateHealthDisplay();
   if (target.health <= 0) finishMatch(attacker);
+  else sound.impact({ blocked: target.blocking && attack.high && !attack.unblockable, launch: attack.launch });
 }
 
 function finishMatch(winner, reason = "knockout") {
   if (matchOver) return;
   matchOver = true;
   matchActive = false;
+  sound.stopMatch();
   if (reason === "knockout") {
+    sound.knockout();
     const loser = winner === player ? opponent : player;
     winner.attack = null;
     loser.attack = null;
@@ -1150,6 +1160,7 @@ function checkSingleProjectile(ballot) {
     if (ballot.launch) cameraTilt = Math.sign(ballot.vx) * 0.045;
     updateHealthDisplay();
     if (target.health <= 0) finishMatch(source);
+    else sound.impact({ launch: ballot.launch });
   }
 }
 
@@ -1324,6 +1335,7 @@ function navigateRoster(key) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (event.target === musicToggle) return;
   const key = event.key.startsWith("Arrow") ? event.key : event.key.toLowerCase();
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(event.key)) event.preventDefault();
 
@@ -1367,6 +1379,25 @@ window.addEventListener("blur", () => keys.clear());
 
 startButton.addEventListener("click", beginMatch);
 document.querySelector("#rematch-button").addEventListener("click", resetToSelect);
+
+if (!sound.available) {
+  musicToggle.disabled = true;
+  musicToggle.title = "Web Audio is not available in this browser.";
+}
+function unlockAudio() {
+  if (!sound.unlock()) {
+    musicToggle.disabled = true;
+    musicToggle.title = "Web Audio could not be initialized.";
+  }
+}
+window.addEventListener("pointerdown", unlockAudio, true);
+window.addEventListener("keydown", unlockAudio, true);
+musicToggle.addEventListener("click", () => {
+  const enabled = musicToggle.getAttribute("aria-pressed") !== "true";
+  musicToggle.setAttribute("aria-pressed", String(enabled));
+  musicToggle.textContent = `Music: ${enabled ? "On" : "Off"}`;
+  sound.setMusicEnabled(enabled);
+});
 
 createArena();
 buildRoster();
