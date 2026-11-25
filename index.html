@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#16121d">
     <title>Montecitorio: Floor Fight!</title>
-    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./style.css?v=3">
   </head>
   <body>
     <main class="game-shell">
@@ -35,6 +35,11 @@
             <div class="fighter-heading"><span class="player-tag">P1</span><strong id="player-name">—</strong></div>
             <div class="health-track"><span id="player-trail" class="health-trail"></span><span id="player-health" class="health-fill"></span></div>
             <div class="health-caption"><span>CONSENSO</span><span id="player-percent">100%</span></div>
+            <div class="super-row">
+              <div id="player-super-track" class="super-track"><span id="player-super-fill" class="super-fill"></span></div>
+              <span id="player-super-percent" class="super-percent">0%</span>
+            </div>
+            <div id="player-super-badge" class="super-badge" aria-hidden="true">SPECIAL READY [L]</div>
           </div>
           <div class="round-clock">
             <span class="clock-label" id="round-status">ROUND 1 · 0–0</span>
@@ -45,6 +50,11 @@
             <div class="fighter-heading"><strong id="opponent-name">—</strong><span class="player-tag cpu-tag">CPU</span></div>
             <div class="health-track"><span id="opponent-trail" class="health-trail"></span><span id="opponent-health" class="health-fill"></span></div>
             <div class="health-caption"><span>APPROVAZIONE</span><span id="opponent-percent">100%</span></div>
+            <div class="super-row super-row-right">
+              <span id="opponent-super-percent" class="super-percent">0%</span>
+              <div id="opponent-super-track" class="super-track"><span id="opponent-super-fill" class="super-fill"></span></div>
+            </div>
+            <div id="opponent-super-badge" class="super-badge" aria-hidden="true">SPECIAL READY</div>
           </div>
         </div>
         <div id="player-combo" class="combo-badge combo-left hidden" aria-live="polite"></div>
@@ -182,34 +192,9 @@
         <aside class="controller-toast hidden" id="controller-toast" role="status" aria-live="polite"></aside>
       </section>
 
-      <footer class="controls">
-        <div class="control-group">
-          <span class="control-label">MOVE</span>
-          <span><kbd>A</kbd><kbd>D</kbd> Walk</span>
-          <span><kbd>W</kbd><kbd>W</kbd> / <kbd>S</kbd><kbd>S</kbd> Sidestep</span>
-        </div>
-        <div class="control-group">
-          <span class="control-label">FOUR LIMBS</span>
-          <span><kbd>U</kbd> Left punch</span>
-          <span><kbd>I</kbd> Right punch</span>
-          <span><kbd>J</kbd> Left kick</span>
-          <span><kbd>K</kbd> Right kick</span>
-        </div>
-        <div class="control-group">
-          <span class="control-label">SPECIAL</span>
-          <span><kbd>S</kbd> + <kbd>I</kbd> Launcher</span>
-          <span><kbd>L</kbd> Signature move</span>
-        </div>
-        <div class="control-group">
-          <span class="control-label">DEFENSE</span>
-          <span>Neutral / Away: high &amp; mid guard</span>
-          <span><kbd>S</kbd> + Away: low guard</span>
-          <span>Forward + <kbd>U</kbd>: timed parry</span>
-        </div>
-      </footer>
       <p class="disclaimer">A playful work of political satire. No actual parliamentary procedure was harmed.</p>
     </main>
-    <script id="game-module" type="module" src="./game.js"></script>
+    <script id="game-module" type="module" src="./game.js?v=2"></script>
     <script>
       function showStartupError() {
         document.querySelector("#engine-error").classList.remove("hidden");

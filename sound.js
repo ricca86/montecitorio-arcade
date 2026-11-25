@@ -119,6 +119,18 @@ function knockout() {
   if (context) crash();
 }
 
+function emptyClick() {
+  if (!context) return;
+  tone(260, 130, 0.045, 0.09, "triangle");
+}
+
+function specialWindup() {
+  if (!context) return;
+  const now = context.currentTime;
+  tone(340, 920, 0.22, 0.16, "sawtooth", now);
+  tone(680, 1280, 0.16, 0.11, "triangle", now + 0.04);
+}
+
 function scheduleMusic() {
   const now = context.currentTime;
   if (nextNote < now) nextNote = now;
@@ -165,6 +177,8 @@ export const sound = {
   swing,
   impact,
   knockout,
+  emptyClick,
+  specialWindup,
   setMusicEnabled(enabled) {
     musicEnabled = enabled;
     syncMusic();

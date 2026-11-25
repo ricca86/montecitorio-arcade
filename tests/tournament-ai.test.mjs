@@ -4,11 +4,12 @@ import test from "node:test";
 import vm from "node:vm";
 import { difficultyForStage } from "../tournament.js";
 import { attackHeight } from "../defense.js";
+import { canAICastSpecial } from "../super-meter.js";
 
 const source = await readFile(new URL("../game.js", import.meta.url), "utf8");
 const aiCode = source.slice(source.indexOf("function setAIState("), source.indexOf("function movePlayer("));
 
-function setup(stage, randomValue) {
+function setup(stage, randomValue, overrides = {}) {
   const calls = [];
   const math = Object.create(Math);
   math.random = () => randomValue;
@@ -16,11 +17,14 @@ function setup(stage, randomValue) {
     x: 1.5, z: 0, health: 100, airborne: false, landingTime: 0,
     root: { scale: { x: 1 } }, definition: { stats: { speed: 3 } },
     difficulty: difficultyForStage(stage), aiState: "IDLE", aiTimer: 5,
-    cooldown: 0, stun: 0, aiCombo: 0, aiSide: 0, blockTimer: 0, vz: 0
+    cooldown: 0, stun: 0, recovery: 0, aiCombo: 0, aiSide: 0, blockTimer: 0, vz: 0,
+    superMeter: 100, usedSpecialInRound: false, lastAttackWasSpecial: false,
+    ...overrides
   };
   const player = { x: 0, y: 0, z: 0, health: 100, attack: null };
   const context = vm.createContext({
-    Math: math, opponent, player, attackHeight, clamp: (n, min, max) => Math.max(min, Math.min(max, n)),
+    Math: math, opponent, player, attackHeight, canAICastSpecial,
+    clamp: (n, min, max) => Math.max(min, Math.min(max, n)),
     random: (min, max) => (min + max) / 2,
     queueAttack: (_fighter, kind) => calls.push(kind),
     useSpecial: () => calls.push("special")
@@ -79,4 +83,16 @@ test("stunned AI cannot move or start attacks", () => {
   context.updateAI(0.1);
   assert.equal(opponent.vx, undefined);
   assert.deepEqual(calls, []);
+});
+
+test("AI obeys Super Meter and anti-spam special limits", () => {
+  const lowMeter = setup(6, 0, { superMeter: 80 });
+  lowMeter.player.attack = { high: true, hit: true, connected: false };
+  lowMeter.context.updateAI(0.04);
+  assert.deepEqual(lowMeter.calls, ["launcher"]);
+
+  const alreadyUsed = setup(6, 0, { superMeter: 100, usedSpecialInRound: true });
+  alreadyUsed.player.attack = { high: true, hit: true, connected: false };
+  alreadyUsed.context.updateAI(0.04);
+  assert.deepEqual(alreadyUsed.calls, ["launcher"]);
 });

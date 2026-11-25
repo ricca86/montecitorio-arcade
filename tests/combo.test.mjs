@@ -5,6 +5,8 @@ import vm from "node:vm";
 import * as THREE from "../vendor/three/three.module.min.js";
 import * as combo from "../combo.js";
 import * as defense from "../defense.js";
+import * as superMeter from "../super-meter.js";
+import { isKickHitboxActive, setSpecialReadyGlow } from "../fighter-model.js";
 import { InputState, keyboardActions } from "../input.js";
 import { fighters } from "../fighters.js";
 
@@ -19,10 +21,11 @@ function setup() {
   const badges = { "#player-combo": badge(), "#cpu-combo": badge() };
   const fighter = (isPlayer) => ({
     definition: fighters[0], input: combo.createComboInput(), isPlayer,
-    health: 100, x: isPlayer ? 0 : 1, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
-    facing: isPlayer ? 1 : -1, attack: null, cooldown: 0, stun: 0, airborne: false,
+    health: 100, superMeter: 0, x: isPlayer ? 0 : 1, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
+    facing: isPlayer ? 1 : -1, attack: null, cooldown: 0, stun: 0, recovery: 0, airborne: false,
     landingTime: 0, dodgeTimer: 0, blocking: false, blockTimer: 0,
     guardMode: null, parryTimer: 0, parryRecovery: 0, parryPose: 0, risingTimer: 0,
+    usedSpecialInRound: false, lastAttackWasSpecial: false, superMeterFlash: 0,
     reactionTime: 0, animationTime: 0, airRotation: 0,
     root: { position: { x: 0, set() {} }, scale: { x: 1 }, getObjectByName() { return null; } }
   });
@@ -34,10 +37,11 @@ function setup() {
     delete(key) { inputState.set(keyboardActions[key], `keyboard:${key}`, false); }
   };
   const context = vm.createContext({
-    THREE, ...combo, ...defense, player, opponent, matchActive: true, isPaused: false, hitStop: 0, shake: 0, cameraTilt: 0,
+    THREE, ...combo, ...defense, ...superMeter, isKickHitboxActive, setSpecialReadyGlow,
+    player, opponent, matchActive: true, isPaused: false, hitStop: 0, shake: 0, cameraTilt: 0,
     keys, inputState, keyboardActions, lastTap: { up: 0, down: 0 }, performance,
     document: { querySelector: (selector) => badges[selector] },
-    sound: { swing() {}, impact() {} }, announceSpecial() {}, spawnBurst() {},
+    sound: { swing() {}, impact() {}, emptyClick() {}, specialWindup() {} }, announceSpecial() {}, spawnBurst() {},
     spawnBallot() {}, spawnCallout() {}, spawnImpact() {}, updateHealthDisplay() {}, finishMatch() {},
     contactPoint: () => new THREE.Vector3(),
     clamp: THREE.MathUtils.clamp, poseFighter() {}, spawnSidestepGhost() {},
@@ -89,6 +93,7 @@ test("buffered strings resolve to correct finishers without frame-perfect presse
     if (entry.inputs[0] === "u" && entry.inputs[1] === "u") assert.equal(player.attack.limb, "rightPunch");
     tick(0.05);
     if (entry.inputs[2] === "launcher") context.keys.add("s");
+    if (entry.inputs[2] === "l") player.superMeter = 100;
     context.playerAttack(entry.inputs[2] === "launcher" ? "i" : entry.inputs[2]);
     tick(0.14);
     assert.equal(player.attack.kind, entry.kind, entry.inputs.join(" "));

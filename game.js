@@ -5,6 +5,22 @@ import { TournamentManager, difficultyForStage, formatTournamentTime } from "./t
 import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
 import { attackHeight, defenseOutcome, isCounterHit } from "./defense.js";
 import { InputState, keyboardActions, gamepadActions } from "./input.js";
+import { buildFighterModel, updateGroundedRig, applyKickAnimation, isKickHitboxActive, setSpecialReadyGlow, createFaceTexture } from "./fighter-model.js";
+import { createArena } from "./arena.js";
+import { createAtmosphereRig, createDynamicCamera } from "./atmosphere.js";
+import {
+  SUPER_METER_START,
+  SUPER_METER_COST,
+  SPECIAL_FRAME_DATA,
+  METER_GAIN,
+  addSuperMeter,
+  applyCombatMeter,
+  canUseSpecial,
+  canAICastSpecial,
+  spendSuperMeter,
+  interruptSpecialStartup,
+  computeSpecialDamage
+} from "./super-meter.js";
 
 const mount = document.querySelector("#game-canvas");
 const rosterNode = document.querySelector("#roster");
@@ -28,11 +44,20 @@ const playerHealthNode = document.querySelector("#player-health");
 const opponentHealthNode = document.querySelector("#opponent-health");
 const playerTrailNode = document.querySelector("#player-trail");
 const opponentTrailNode = document.querySelector("#opponent-trail");
+const playerSuperTrack = document.querySelector("#player-super-track");
+const playerSuperFill = document.querySelector("#player-super-fill");
+const playerSuperPercent = document.querySelector("#player-super-percent");
+const playerSuperBadge = document.querySelector("#player-super-badge");
+const opponentSuperTrack = document.querySelector("#opponent-super-track");
+const opponentSuperFill = document.querySelector("#opponent-super-fill");
+const opponentSuperPercent = document.querySelector("#opponent-super-percent");
+const opponentSuperBadge = document.querySelector("#opponent-super-badge");
+const touchSpecialButton = document.querySelector(".touch-special");
 const timerNode = document.querySelector("#timer");
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color("#33243b");
-scene.fog = new THREE.FogExp2("#33243b", 0.025);
+scene.background = new THREE.Color("#2b1e33");
+scene.fog = new THREE.FogExp2("#2b1e33", 0.018);
 
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 80);
 camera.position.set(0, 7.4, 17.4);
@@ -47,19 +72,13 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 mount.appendChild(renderer.domElement);
 
-const ambientLight = new THREE.HemisphereLight("#b5a5bf", "#1a1424", 0.7);
-scene.add(ambientLight);
-const keyLight = new THREE.SpotLight("#ffe1a0", 190, 32, Math.PI / 3.3, 0.32, 2);
-keyLight.position.set(-2, 11, 3);
-keyLight.target.position.set(0, 0, -0.5);
-keyLight.castShadow = true;
-keyLight.shadow.mapSize.set(2048, 2048);
-keyLight.shadow.bias = -0.0003;
-keyLight.shadow.normalBias = 0.025;
-scene.add(keyLight, keyLight.target);
-const rimLight = new THREE.DirectionalLight("#788fce", 1.1);
-rimLight.position.set(2, 5, -6);
-scene.add(rimLight);
+const atmosphere = createAtmosphereRig(scene, renderer);
+const ambientLight = atmosphere.rig.hemiLight;
+const keyLight = atmosphere.rig.keyLight;
+const rimLight = atmosphere.rig.rimLight;
+const dynamicCamera = createDynamicCamera(camera);
+const cameraRig = dynamicCamera.rigPos;
+const cameraTarget = dynamicCamera.targetPos;
 
 const clock = new THREE.Clock();
 const fightersById = new Map(fighters.map((fighter) => [fighter.id, fighter]));
@@ -75,8 +94,6 @@ const impactEffects = [];
 const sidestepGhosts = [];
 const callouts = [];
 const comicWords = ["RIBALTONE!", "VETO!", "FIDUCIA!", "QUORUM!"];
-const cameraRig = new THREE.Vector3(0, 7.4, 17.4);
-const cameraTarget = new THREE.Vector3(0, 1.5, -0.5);
 const sparkGeometry = new THREE.OctahedronGeometry(0.07, 0);
 const ringGeometry = new THREE.RingGeometry(0.68, 0.82, 16);
 
@@ -95,11 +112,10 @@ let matchCheckpoint = null;
 let victory = null;
 let elapsed = 60;
 let hitStop = 0;
+let koSlowMo = 0;
 let shake = 0;
 let cameraTilt = 0;
 let toastTimer = 0;
-let bannerTimer = 0;
-let bannerPending = false;
 let nextBallot = 0;
 let announcerTimer = 0;
 let pausedAnimations = [];
@@ -119,525 +135,8 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-function material(color, roughness = 0.78, metalness = 0) {
-  return new THREE.MeshStandardMaterial({ color, roughness, metalness, flatShading: true });
-}
-
-function addBox(parent, size, position, color, options = {}) {
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(...size),
-    material(color, options.roughness, options.metalness)
-  );
-  mesh.position.set(...position);
-  mesh.castShadow = options.castShadow !== false;
-  mesh.receiveShadow = options.receiveShadow !== false;
-  if (options.rotation) mesh.rotation.set(...options.rotation);
-  parent.add(mesh);
-  return mesh;
-}
-
-function addSphere(parent, radius, position, color, scale = [1, 1, 1]) {
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 8, 6), material(color));
-  mesh.position.set(...position);
-  mesh.scale.set(...scale);
-  mesh.castShadow = true;
-  parent.add(mesh);
-  return mesh;
-}
-
-function makeFlag(parent, x, y, z, colors) {
-  addBox(parent, [0.035, 0.8, 0.035], [x, y + 0.38, z], "#d9c7a0");
-  colors.forEach((color, index) => {
-    addBox(parent, [0.29, 0.24, 0.025], [x + 0.16, y + 0.65 - index * 0.24, z], color);
-  });
-}
-
-function createArena() {
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(24, 20),
-    material("#70533e", 0.94)
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.05;
-  floor.receiveShadow = true;
-  scene.add(floor);
-
-  const stage = new THREE.Mesh(
-    new THREE.CylinderGeometry(7.5, 7.7, 0.18, 48),
-    material("#8e6042", 0.82)
-  );
-  stage.position.y = 0.02;
-  stage.receiveShadow = true;
-  stage.castShadow = true;
-  scene.add(stage);
-
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(6.7, 0.045, 8, 72),
-    material("#eacb8b", 0.35, 0.38)
-  );
-  ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.13;
-  scene.add(ring);
-
-  addBox(scene, [21, 6, 0.45], [0, 3, -9], "#3e3043");
-  addBox(scene, [19, 0.4, 0.52], [0, 5.7, -8.72], "#7b5143");
-
-  for (let row = 0; row < 3; row += 1) {
-    const radius = 4.4 + row * 1.05;
-    const count = 18 + row * 2;
-    for (let i = 0; i < count; i += 1) {
-      const angle = -1.12 + (2.24 * i) / (count - 1);
-      const x = Math.sin(angle) * radius;
-      const z = -Math.cos(angle) * radius - 1.55;
-      const bench = new THREE.Group();
-      bench.position.set(x, row * 0.24, z);
-      bench.rotation.y = angle * 0.45;
-      addBox(bench, [0.93, 0.4, 0.44], [0, 0.25, 0], "#552b3a");
-      addBox(bench, [0.93, 0.43, 0.17], [0, 0.56, -0.15], "#77384a");
-      addBox(bench, [0.82, 0.045, 0.035], [0, 0.46, 0.17], "#bd8a55");
-      scene.add(bench);
-    }
-  }
-
-  const podium = new THREE.Group();
-  podium.position.set(0, 0.12, -6.55);
-  addBox(podium, [1.8, 1.35, 0.84], [0, 0.66, 0], "#6e422c");
-  addBox(podium, [2.05, 0.14, 1.05], [0, 1.39, 0], "#b17b4b");
-  addBox(podium, [1.3, 0.65, 0.045], [0, 0.78, 0.43], "#8c5734");
-  addBox(podium, [1.2, 0.08, 0.05], [0, 1.13, 0.47], "#e1bd79");
-  const seal = new THREE.Mesh(
-    new THREE.CircleGeometry(0.18, 16),
-    material("#d8b15c", 0.35, 0.45)
-  );
-  seal.position.set(0, 0.78, 0.47);
-  podium.add(seal);
-  scene.add(podium);
-
-  makeFlag(scene, -2.2, 3.35, -7.9, ["#17965d", "#f7f1e4", "#d94c4c"]);
-  makeFlag(scene, 2.2, 3.35, -7.9, ["#2757ac", "#efc74b", "#2757ac"]);
-
-  for (let i = 0; i < 10; i += 1) {
-    const x = -8.2 + i * 1.82;
-    const column = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.2, 3.8, 8),
-      material("#b18a69", 0.6)
-    );
-    column.position.set(x, 2.65, -8.56);
-    column.castShadow = true;
-    scene.add(column);
-    const cap = new THREE.Mesh(
-      new THREE.BoxGeometry(0.68, 0.18, 0.6),
-      material("#d1ae84")
-    );
-    cap.position.set(x, 4.62, -8.56);
-    scene.add(cap);
-  }
-
-  const ceiling = new THREE.Mesh(
-    new THREE.SphereGeometry(12, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: "#634b67", side: THREE.BackSide })
-  );
-  ceiling.position.y = 4.8;
-  ceiling.rotation.x = Math.PI;
-  scene.add(ceiling);
-
-}
-
-function addGlasses(group) {
-  for (const x of [-0.14, 0.14]) {
-    const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(0.105, 0.018, 5, 12),
-      material("#28272d", 0.36, 0.25)
-    );
-    rim.position.set(x, 0.08, 0.44);
-    group.add(rim);
-    const lens = new THREE.Mesh(
-      new THREE.CircleGeometry(0.095, 8),
-      new THREE.MeshStandardMaterial({ color: "#b9dbe5", transparent: true, opacity: 0.2, depthWrite: false, flatShading: true })
-    );
-    lens.position.set(x, 0.08, 0.435);
-    group.add(lens);
-  }
-  addBox(group, [0.1, 0.026, 0.03], [0, 0.08, 0.44], "#29272b");
-}
-
-function createProp(hand, fighter) {
-  const prop = new THREE.Group();
-  prop.name = `${fighter.id}-prop`;
-  prop.rotation.z = -2.2;
-  hand.add(prop);
-  switch (fighter.prop) {
-    case "shovel": {
-      addBox(prop, [0.38, 0.16, 0.24], [0.15, 0.07, 0], "#dfaa22");
-      addBox(prop, [0.12, 0.65, 0.14], [0.36, 0.32, 0], "#efc52e", { rotation: [0, 0, -0.55] });
-      addSphere(prop, 0.09, [0.53, 0.58, 0], "#4b4b48");
-      addBox(prop, [0.12, 0.48, 0.14], [0.68, 0.42, 0], "#f4ca36", { rotation: [0, 0, 0.65] });
-      addBox(prop, [0.3, 0.18, 0.28], [0.79, 0.2, 0], "#efbd21", { rotation: [0, 0, 0.35] });
-      addBox(prop, [0.3, 0.035, 0.29], [0.82, 0.11, 0], "#6e6145");
-      const label = document.createElement("canvas");
-      label.width = 128;
-      label.height = 32;
-      const context = label.getContext("2d");
-      context.fillStyle = "#efbd21";
-      context.fillRect(0, 0, label.width, label.height);
-      context.fillStyle = "#302c24";
-      context.font = "bold 24px sans-serif";
-      context.textAlign = "center";
-      context.fillText("RUSPA", 64, 24);
-      const texture = new THREE.CanvasTexture(label);
-      texture.colorSpace = THREE.SRGBColorSpace;
-      texture.magFilter = THREE.NearestFilter;
-      const lettering = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.28, 0.07),
-        new THREE.MeshBasicMaterial({ map: texture })
-      );
-      lettering.position.set(0.79, 0.2, 0.145);
-      lettering.rotation.z = 0.35;
-      prop.add(lettering);
-      break;
-    }
-    case "briefcase": {
-      addBox(prop, [0.55, 0.4, 0.2], [0.12, -0.15, 0], "#8c5c37");
-      addBox(prop, [0.19, 0.045, 0.045], [0.12, 0.1, 0.12], "#d7b15d");
-      addBox(prop, [0.035, 0.8, 0.035], [0.4, 0.38, 0], "#d9c7a0");
-      addBox(prop, [0.48, 0.3, 0.025], [0.65, 0.64, 0], "#174a9e");
-      for (let i = 0; i < 12; i += 1) {
-        const angle = i * Math.PI / 6;
-        addSphere(prop, 0.018, [0.65 + Math.cos(angle) * 0.1, 0.64 + Math.sin(angle) * 0.1, 0.02], "#f4d94c");
-      }
-      break;
-    }
-    case "dossier":
-      for (let i = 0; i < 5; i += 1) {
-        addBox(prop, [0.64, 0.11, 0.42], [0.12, i * 0.1 - 0.19, 0.05], i % 2 ? "#fffaf0" : "#e5e1d8");
-        addBox(prop, [0.06, 0.105, 0.43], [-0.17, i * 0.1 - 0.19, 0.05], "#b9453c");
-      }
-      break;
-    case "microphone":
-      addBox(prop, [0.07, 0.48, 0.07], [0, 0.18, 0], "#33323a");
-      addSphere(prop, 0.1, [0, 0.46, 0], "#55545d", [1, 1.25, 1]);
-      break;
-    case "palette":
-      addBox(prop, [0.46, 0.31, 0.08], [0.07, 0.02, 0], "#e5d3b6");
-      ["#e2655e", "#e7c854", "#70b988", "#618dc8"].forEach((color, index) => {
-        addSphere(prop, 0.075, [-0.08 + index * 0.105, 0.05, 0.07], color);
-      });
-      break;
-    case "pen": {
-      addBox(prop, [0.09, 0.7, 0.09], [0, 0.16, 0], "#d8ad4c", { metalness: 0.45 });
-      addBox(prop, [0.3, 0.06, 0.08], [0, 0.05, 0], "#f1d27b", { metalness: 0.45 });
-      const nib = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.2, 4), material("#ffdf7b", 0.3, 0.5));
-      nib.position.y = 0.61;
-      prop.add(nib);
-      break;
-    }
-    case "plant": {
-      addBox(prop, [0.09, 1.05, 0.09], [0, 0.28, 0], "#785a35");
-      addBox(prop, [0.34, 0.27, 0.3], [0, -0.26, 0], "#b96951");
-      addSphere(prop, 0.23, [0, 0.83, 0], "#5da465", [1, 1.25, 0.8]);
-      addSphere(prop, 0.16, [-0.15, 0.68, 0], "#82b96d");
-      addSphere(prop, 0.16, [0.15, 0.72, 0], "#73b568");
-      break;
-    }
-    default:
-      makeFlag(prop, 0, 0, 0, ["#17965d", "#f7f1e4", "#d94c4c"]);
-  }
-  return prop;
-}
-
-function makeJoint(parent, name, position) {
-  const joint = new THREE.Group();
-  joint.name = name;
-  joint.position.set(...position);
-  parent.add(joint);
-  return joint;
-}
-
-function pixelTexture(definition, kind) {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 64;
-  const ctx = canvas.getContext("2d");
-  const rect = (color, x, y, width, height) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, width, height);
-  };
-  if (kind === "face") {
-    const dark = definition.hair;
-    for (const x of [10, 39]) {
-      rect(dark, x, 14, 15, 3);
-      rect(dark, x + (x < 32 ? 10 : 0), 17, 5, 2);
-      rect("#fff5df", x + 1, 20, 13, 6);
-      rect("#302c30", x + 6, 20, 4, 6);
-      rect("#ffffff", x + 7, 20, 2, 2);
-    }
-    rect("#b67d68", 29, 34, 3, 5);
-    rect("#b67d68", 32, 38, 6, 2);
-    rect("#78443f", 23, 48, 18, 3);
-    rect("#9e5c52", 26, 51, 12, 2);
-    if (definition.beard) {
-      for (let y = 43; y < 62; y += 4) {
-        for (let x = 8 + (y % 8); x < 56; x += 6) {
-          if (y < 48 && x > 19 && x < 45) continue;
-          rect("#64473b", x, y, 2, 2);
-        }
-      }
-    } else if (["tajani", "bonelli", "calenda"].includes(definition.id)) {
-      for (const x of [8, 43]) {
-        rect("#bf8a75", x, 28, 12, 1);
-        rect("#bf8a75", x + 2, 31, 8, 1);
-      }
-    }
-  } else if (kind === "suit") {
-    rect(definition.suit, 0, 0, 64, 64);
-    for (let x = 2; x < 64; x += 8) rect("rgba(255,255,255,0.12)", x, 0, 1, 64);
-    rect("rgba(0,0,0,0.18)", 0, 0, 64, 4);
-    rect("rgba(0,0,0,0.14)", 0, 57, 64, 7);
-    rect("rgba(0,0,0,0.25)", 10, 38, 12, 2);
-    rect("rgba(0,0,0,0.25)", 42, 38, 12, 2);
-  } else if (kind === "shirt") {
-    rect("#f2eee4", 0, 0, 64, 64);
-    rect("#c9c4bc", 0, 0, 64, 7);
-    rect("#c9c4bc", 29, 0, 6, 64);
-    for (let y = 12; y < 64; y += 12) rect("#7f7b76", 31, y, 2, 2);
-  } else if (kind === "tie") {
-    rect(definition.tie, 0, 0, 64, 64);
-    for (let y = 0; y < 64; y += 12) {
-      for (let x = 0; x < 64; x += 4) rect("rgba(255,255,255,0.35)", x, (y + x) % 64, 4, 2);
-    }
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
-  texture.generateMipmaps = false;
-  texture.name = `${definition.id}-${kind}`;
-  return texture;
-}
-
-function sculpt(parent, name, profile, position, color, scale = [1, 1, 1], map = null) {
-  const geometry = new THREE.LatheGeometry(profile.map(([radius, y]) => new THREE.Vector2(radius, y)), 8);
-  const surface = material(map ? "#ffffff" : color);
-  surface.map = map;
-  const mesh = new THREE.Mesh(geometry, surface);
-  mesh.name = name;
-  mesh.position.set(...position);
-  mesh.scale.set(...scale);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  parent.add(mesh);
-  return mesh;
-}
-
-function panel(parent, name, points, position, color, depth = 0.025, map = null) {
-  const shape = new THREE.Shape();
-  points.forEach(([x, y], i) => i ? shape.lineTo(x, y) : shape.moveTo(x, y));
-  shape.closePath();
-  const surface = material(map ? "#ffffff" : color);
-  surface.map = map;
-  const mesh = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false }), surface);
-  mesh.name = name;
-  mesh.position.set(...position);
-  mesh.castShadow = true;
-  parent.add(mesh);
-  return mesh;
-}
-
-function addFist(hand, color, side) {
-  sculpt(hand, "fist", [[0.08, -0.12], [0.12, -0.08], [0.13, 0.04], [0.1, 0.1]], [0, 0, 0], color, [1, 1, 0.85]);
-  for (let i = 0; i < 4; i += 1) {
-    addSphere(hand, 0.035, [-0.09 + i * 0.06, -0.07, 0.085], color, [1, 0.7, 0.7]);
-  }
-  const thumb = addSphere(hand, 0.06, [side * 0.11, 0.005, 0.06], color, [0.65, 1.4, 0.75]);
-  thumb.rotation.z = side * 0.55;
-  thumb.name = "thumb";
-}
-
-function addStarCuff(elbow) {
-  addBox(elbow, [0.24, 0.1, 0.25], [0, -0.23, 0], "#f2eee4");
-  const star = new THREE.Shape();
-  for (let i = 0; i < 10; i += 1) {
-    const angle = Math.PI / 2 + i * Math.PI / 5;
-    const radius = i % 2 ? 0.023 : 0.055;
-    if (i === 0) star.moveTo(Math.cos(angle) * radius, Math.sin(angle) * radius);
-    else star.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius);
-  }
-  star.closePath();
-  const mesh = new THREE.Mesh(
-    new THREE.ShapeGeometry(star),
-    new THREE.MeshStandardMaterial({ color: "#ffe064", emissive: "#c99214", emissiveIntensity: 1.1, flatShading: true })
-  );
-  mesh.position.set(0, -0.23, 0.13);
-  elbow.add(mesh);
-}
-
-function buildFighterModel(definition, facing) {
-  const root = new THREE.Group();
-  root.scale.x = facing;
-  const model = new THREE.Group();
-  model.scale.setScalar(definition.height);
-  root.add(model);
-
-  const hips = makeJoint(model, "hips", [0, 0.9, 0]);
-  const torso = makeJoint(hips, "torso", [0, 0.06, 0]);
-  const head = makeJoint(torso, "head", [0, 1.08, 0.02]);
-  head.rotation.order = "YXZ";
-  const leftShoulder = makeJoint(torso, "leftShoulder", [-0.46, 0.62, 0.23]);
-  const rightShoulder = makeJoint(torso, "rightShoulder", [0.46, 0.62, 0.04]);
-  const leftElbow = makeJoint(leftShoulder, "leftElbow", [0, -0.34, 0]);
-  const rightElbow = makeJoint(rightShoulder, "rightElbow", [0, -0.34, 0]);
-  const leftHip = makeJoint(hips, "leftHip", [-0.23, 0, 0]);
-  const rightHip = makeJoint(hips, "rightHip", [0.23, 0, 0]);
-  const leftKnee = makeJoint(leftHip, "leftKnee", [0, -0.37, 0]);
-  const rightKnee = makeJoint(rightHip, "rightKnee", [0, -0.37, 0]);
-  const joints = { hips, torso, head, leftShoulder, leftElbow, rightShoulder, rightElbow, leftHip, leftKnee, rightHip, rightKnee };
-  const clothing = [];
-
-  sculpt(hips, "pelvis", [[0.21, -0.11], [0.3, -0.07], [0.3, 0.1], [0.23, 0.13]], [0, 0, 0], "#34303b", [1, 1, 0.68]);
-  sculpt(hips, "belt", [[0.29, 0.04], [0.3, 0.1]], [0, 0, 0], "#29232a", [1, 1, 0.7]);
-  addBox(hips, [0.12, 0.075, 0.035], [0, 0.07, 0.22], "#c5a45f", { metalness: 0.65 });
-  const shoulders = definition.id === "schlein" ? 0.91 : definition.id === "meloni" ? 0.73 : 0.84;
-  sculpt(torso, "jacket", [[0.34, 0], [0.37, 0.12], [0.34, 0.4], [0.43, 0.64], [0.35, 0.73], [0.17, 0.76]],
-    [0, 0, 0], definition.suit, [shoulders / 0.86, 1, 0.58], pixelTexture(definition, "suit"));
-  const shirt = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.61), material("#ffffff"));
-  shirt.name = "shirt";
-  shirt.material.map = pixelTexture(definition, "shirt");
-  shirt.position.set(0, 0.39, 0.255);
-  torso.add(shirt);
-  const tie = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.46), material("#ffffff"));
-  tie.name = "tie";
-  tie.material.map = pixelTexture(definition, "tie");
-  const tiePivot = makeJoint(torso, "tiePivot", [0, 0.63, 0.263]);
-  tie.position.set(0, -0.23, 0);
-  tiePivot.add(tie);
-  clothing.push({ joint: tiePivot, side: 1, kind: "tie" });
-  for (const side of [-1, 1]) {
-    panel(torso, "lapel", [[side * 0.1, 0.66], [side * 0.31, 0.73], [side * 0.27, 0.53], [side * 0.17, 0.48], [side * 0.08, 0.19]],
-      [0, 0, 0.25], definition.suit);
-    panel(torso, "collar", [[side * 0.08, 0.68], [side * 0.27, 0.75], [side * 0.2, 0.57]],
-      [0, 0, 0.28], "#e7e2da", 0.03);
-    const tail = makeJoint(torso, "coatTail", [side * 0.19, 0.1, -0.15]);
-    panel(tail, "coatTailPanel", [[-0.16, 0.03], [0.16, 0.03], [0.13, -0.28], [-0.14, -0.3]],
-      [0, 0, 0], definition.suit, 0.04);
-    clothing.push({ joint: tail, side, kind: "coat" });
-  }
-  if (definition.id === "meloni") {
-    ["#17965d", "#f7f1e4", "#d94c4c"].forEach((color, index) => {
-      addBox(torso, [0.075, 0.88, 0.03], [(index - 1) * 0.065, 0.39, 0.27], color, { rotation: [0, 0, -0.55] });
-    });
-    const sashEnd = makeJoint(torso, "sashEnd", [0.22, 0.07, 0.27]);
-    ["#17965d", "#f7f1e4", "#d94c4c"].forEach((color, index) => {
-      panel(sashEnd, "sashRibbon", [[index * 0.055 - 0.08, 0], [index * 0.055 - 0.025, 0], [index * 0.055, -0.35], [index * 0.055 - 0.055, -0.35]],
-        [0, 0, 0], color, 0.015);
-    });
-    clothing.push({ joint: sashEnd, side: 1, kind: "sash" });
-  }
-  if (definition.id === "salvini") {
-    addBox(torso, [0.035, 0.66, 0.025], [0, 0.36, 0.25], "#afd0e3");
-    addBox(torso, [0.22, 0.12, 0.025], [-0.23, 0.48, 0.25], "#245d9c");
-  }
-  if (definition.id === "conte") addBox(torso, [0.15, 0.1, 0.025], [-0.26, 0.52, 0.25], "#f4ede0");
-  if (definition.pin) addSphere(torso, 0.06, [-0.29, 0.52, 0.25], "#edc735", [1, 1, 0.4]);
-
-  const upperColor = definition.id === "salvini" ? "#d8dfdf" : definition.suit;
-  const forearmColor = definition.rolledSleeves ? definition.skin : upperColor;
-  for (const [shoulder, elbow] of [[leftShoulder, leftElbow], [rightShoulder, rightElbow]]) {
-    sculpt(shoulder, "upperSleeve", [[0.1, -0.35], [0.13, -0.27], [0.15, -0.08], [0.12, 0.02]], [0, 0, 0], upperColor);
-    addSphere(shoulder, 0.13, [0, 0, 0], upperColor);
-    sculpt(elbow, "forearm", [[0.075, -0.34], [0.1, -0.28], [0.13, -0.13], [0.11, 0.02]], [0, 0, 0], forearmColor);
-    sculpt(elbow, "cuff", [[0.11, -0.08], [0.13, -0.065], [0.13, 0.015], [0.11, 0.03]], [0, definition.rolledSleeves ? 0 : -0.25, 0], "#f1eee5");
-    if (definition.id === "tajani") addStarCuff(elbow);
-  }
-  const leftHand = makeJoint(leftElbow, "leftHand", [0, -0.34, 0.02]);
-  const rightHand = makeJoint(rightElbow, "rightHand", [0, -0.34, 0.02]);
-  addFist(leftHand, definition.skin, -1);
-  addFist(rightHand, definition.skin, 1);
-
-  for (const [hip, knee] of [[leftHip, leftKnee], [rightHip, rightKnee]]) {
-    sculpt(hip, "trouserThigh", [[0.115, -0.39], [0.13, -0.28], [0.15, -0.08], [0.14, 0.04]], [0, 0, 0], "#34303b", [1, 1, 1.05]);
-    sculpt(knee, "trouserShin", [[0.095, -0.34], [0.11, -0.26], [0.13, -0.1], [0.115, 0.02]], [0, 0, 0], "#34303b");
-    sculpt(knee, "trouserCuff", [[0.105, -0.34], [0.12, -0.32], [0.12, -0.27]], [0, 0, 0], "#282630");
-    sculpt(knee, "shoe", [[0.11, -0.44], [0.15, -0.42], [0.14, -0.36], [0.09, -0.31]], [0, 0, 0.07], "#201e26", [1, 1, 1.5]);
-    sculpt(knee, "sole", [[0.14, -0.46], [0.15, -0.42]], [0, 0, 0.07], "#111016", [1, 1, 1.5]);
-    addBox(knee, [0.2, 0.04, 0.14], [0, -0.46, -0.06], "#111016");
-  }
-
-  sculpt(head, "head", [[0.08, -0.42], [0.22, -0.38], [0.32, -0.26], [0.4, -0.05], [0.4, 0.18], [0.33, 0.34], [0.15, 0.42], [0, 0.43]],
-    [0, 0, 0], definition.skin, [1, 1, 0.98]);
-  for (const side of [-1, 1]) {
-    addSphere(head, 0.09, [side * 0.39, -0.02, 0], definition.skin, [0.65, 1.3, 0.7]);
-    addSphere(head, 0.12, [side * 0.24, -0.1, 0.28], definition.skin, [1, 0.65, 0.55]);
-  }
-  const face = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.65, 0.6),
-    new THREE.MeshStandardMaterial({ map: pixelTexture(definition, "face"), transparent: true, alphaTest: 0.1, flatShading: true })
-  );
-  face.name = "face";
-  face.position.set(0, 0, 0.4);
-  head.add(face);
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.17, 4), material(definition.skin));
-  nose.name = "nose";
-  nose.position.set(0, -0.035, 0.43);
-  nose.rotation.x = Math.PI / 2;
-  head.add(nose);
-  const hairPivot = makeJoint(head, "hairPivot", [0, 0.25, 0]);
-  const hair = makeJoint(hairPivot, "hair", [0, -0.25, 0]);
-  clothing.push({ joint: hairPivot, side: 1, kind: "hair" });
-  addSphere(hair, 0.36, [0, 0.32, -0.04], definition.hair, [1.06, 0.48, 0.94]);
-  if (definition.id === "meloni") {
-    for (const side of [-1, 1]) {
-      const pivot = makeJoint(hair, "hairLockPivot", [side * 0.32, 0.25, 0]);
-      const locks = makeJoint(pivot, "hairLocks", [-side * 0.32, -0.25, 0]);
-      clothing.push({ joint: pivot, side, kind: "hair" });
-      for (let i = 0; i < 3; i += 1) {
-        const lock = addSphere(locks, 0.19, [side * (0.32 + i * 0.025), 0.13 - i * 0.12, -0.02 + i * 0.05], definition.hair, [0.65, 1.1, 1.2]);
-        lock.rotation.z = side * 0.14;
-      }
-    }
-    const fringe = addSphere(hair, 0.3, [-0.08, 0.28, 0.2], definition.hair, [1.05, 0.35, 0.6]);
-    fringe.rotation.z = -0.16;
-  } else if (definition.wavyHair) {
-    for (let i = 0; i < 6; i += 1) {
-      addSphere(hair, 0.17, [-0.33 + i * 0.13, 0.34 + (i % 2) * 0.06, 0.07], definition.hair, [0.85, 1, 0.85]);
-    }
-    for (const x of [-0.34, 0.34]) {
-      const pivot = makeJoint(hair, "hairLockPivot", [x, 0.25, 0]);
-      const locks = makeJoint(pivot, "hairLocks", [-x, -0.25, 0]);
-      clothing.push({ joint: pivot, side: Math.sign(x), kind: "hair" });
-      for (let i = 0; i < 4; i += 1) {
-        addSphere(locks, 0.16, [x + Math.sign(x) * (i % 2) * 0.04, 0.15 - i * 0.14, -0.04], definition.hair, [0.85, 1.15, 0.85]);
-      }
-    }
-  } else if (definition.slickHair) {
-    for (let i = 0; i < 4; i += 1) {
-      const lock = addSphere(hair, 0.24, [-0.23 + i * 0.15, 0.4 + (i === 1 ? 0.08 : 0), 0.08], definition.hair, [0.6, 0.75, 1.3]);
-      lock.rotation.x = -0.35;
-    }
-  } else if (definition.id === "renzi") {
-    const fringe = addSphere(hair, 0.3, [0, 0.32, 0.08], definition.hair, [1, 0.45, 0.9]);
-    fringe.rotation.z = -0.1;
-  }
-
-  if (definition.beard) {
-    for (const side of [-1, 1]) {
-      addSphere(head, 0.18, [side * 0.25, -0.23, 0.19], definition.hair, [0.6, 0.85, 0.7]);
-    }
-    addSphere(head, 0.18, [0, -0.36, 0.2], definition.hair, [1, 0.4, 0.8]);
-  }
-  if (definition.glasses) addGlasses(head);
-  if (definition.scarf) {
-    sculpt(torso, "scarfCollar", [[0.34, 0.68], [0.36, 0.78], [0.25, 0.81]], [0, 0, 0], "#428555", [1, 1, 0.75]);
-    for (const side of [-1, 1]) {
-      const scarfEnd = makeJoint(torso, "scarfEnd", [side * 0.2, 0.73, -0.24]);
-      panel(scarfEnd, "scarfPanel", [[-0.09, 0], [0.09, 0], [0.12, -0.55], [-0.07, -0.6]],
-        [0, 0, 0], side < 0 ? "#3e9257" : "#5ca565", 0.025);
-      scarfEnd.rotation.x = -0.4;
-      clothing.push({ joint: scarfEnd, side, kind: "scarf" });
-    }
-  }
-
-  const prop = createProp(rightHand, definition);
-  return { root, model, joints, leftHand, rightHand, prop, clothing };
-}
+const arena = createArena(scene);
+atmosphere.bindArena(arena);
 
 function createCombatant(definition, x, z, facing, isPlayer) {
   const body = buildFighterModel(definition, facing);
@@ -654,9 +153,11 @@ function createCombatant(definition, x, z, facing, isPlayer) {
     vy: 0,
     vz: 0,
     health: 100,
+    superMeter: SUPER_METER_START,
     facing,
     attack: null,
     cooldown: 0,
+    recovery: 0,
     dodgeTimer: 0,
     ghostTimer: 0,
     blockTimer: 0,
@@ -666,6 +167,8 @@ function createCombatant(definition, x, z, facing, isPlayer) {
     parryRecovery: 0,
     parryPose: 0,
     risingTimer: 0,
+    usedSpecialInRound: false,
+    lastAttackWasSpecial: false,
     stun: 0,
     animationTime: 0,
     reactionTime: 0,
@@ -745,6 +248,10 @@ function beginMatch() {
 }
 
 function setStageMood(stage) {
+  if (typeof atmosphere !== "undefined") {
+    atmosphere.applyStage(stage + 1);
+    return;
+  }
   const mood = stage < 3
     ? { background: "#4b5267", sky: "#d7e5ff", ground: "#3d3442", ambient: 1.1, key: "#fff3d4", intensity: 210, rim: "#a7c6ff" }
     : stage < 6
@@ -802,15 +309,11 @@ function drawLadderPortrait(canvas, fighter) {
   ctx.fillRect(22, 18, 52, 14);
   ctx.fillRect(23, 28, fighter.id === "meloni" ? 29 : 18, 5);
   if (fighter.slickHair) ctx.fillRect(30, 12, 38, 9);
-  const faceTexture = pixelTexture(fighter, "face");
-  ctx.drawImage(faceTexture.image, 26, 34, 44, 37);
-  faceTexture.dispose();
-  if (fighter.beard) {
-    ctx.fillStyle = fighter.hair;
-    ctx.fillRect(26, 64, 8, 8);
-    ctx.fillRect(62, 64, 8, 8);
-    ctx.fillRect(34, 73, 28, 5);
+  const faceTexture = createFaceTexture(fighter);
+  if (faceTexture.image && typeof faceTexture.image.getContext === "function") {
+    ctx.drawImage(faceTexture.image, 36, 36, 56, 62, 26, 32, 44, 45);
   }
+  faceTexture.dispose();
   if (fighter.glasses) {
     ctx.strokeStyle = "#201e25";
     ctx.lineWidth = 2;
@@ -909,6 +412,7 @@ function startRound() {
   ladderTimeout = null;
   clearCombatEffects();
   clearInputs();
+  arena.resetProps();
   sound.confirm();
   sound.startMatch();
   if (fightersInMatch.length) {
@@ -936,6 +440,7 @@ function startRound() {
   elapsed = 60;
   matchOver = false;
   matchActive = true;
+  koSlowMo = 0;
   updateTouchVisibility();
   victory = null;
   hitStop = 0;
@@ -952,7 +457,9 @@ function startRound() {
   document.querySelector("#hud").classList.add("active");
   document.querySelector("#player-name").textContent = player.definition.name;
   document.querySelector("#opponent-name").textContent = `${opponent.definition.name}${tournament.currentStage === 7 ? " · BOSS" : ""}`;
-  toast.textContent = `SIGNATURE: ${player.definition.special.toUpperCase()}  ·  PRESS L`;
+  const stagePreset = atmosphere.applyStage(tournament.currentStage + 1);
+  document.querySelector(".edition").innerHTML = `STAGE ${tournament.currentStage + 1}/8 <span>•</span> ${stagePreset.label}`;
+  toast.textContent = `SIGNATURE: ${player.definition.special.toUpperCase()}  ·  BUILD 100% & PRESS L`;
   updateHealthDisplay();
   showAnnouncer();
 }
@@ -1009,6 +516,7 @@ function returnToTitleScreen() {
   clearCombatEffects();
   victory = null;
   hitStop = 0;
+  if (typeof koSlowMo !== "undefined") koSlowMo = 0;
   shake = 0;
   cameraTilt = 0;
   elapsed = 60;
@@ -1021,19 +529,25 @@ function returnToTitleScreen() {
   document.querySelector("#hud").classList.remove("active");
   fightersInMatch.forEach(disposeFighter);
   fightersInMatch.length = 0;
+  if (typeof arena !== "undefined" && arena.resetProps) arena.resetProps();
   player = null;
   opponent = null;
   document.querySelector("#player-combo").classList.add("hidden");
   document.querySelector("#cpu-combo").classList.add("hidden");
   tournament = null;
-  scene.background.set("#33243b");
-  scene.fog.color.set("#33243b");
-  ambientLight.color.set("#b5a5bf");
-  ambientLight.groundColor.set("#1a1424");
-  ambientLight.intensity = 0.7;
-  keyLight.color.set("#ffe1a0");
-  keyLight.intensity = 190;
-  rimLight.color.set("#788fce");
+  if (typeof atmosphere !== "undefined") {
+    atmosphere.applyStage(1);
+    document.querySelector(".edition").innerHTML = `LIVE FROM THE CHAMBER <span>•</span> ROUND 1`;
+  } else {
+    scene.background.set("#33243b");
+    scene.fog.color.set("#33243b");
+    ambientLight.color.set("#b5a5bf");
+    ambientLight.groundColor.set("#1a1424");
+    ambientLight.intensity = 0.7;
+    keyLight.color.set("#ffe1a0");
+    keyLight.intensity = 190;
+    rimLight.color.set("#788fce");
+  }
   cameraRig.set(0, 7.4, 17.4);
   cameraTarget.set(0, 1.5, -0.5);
   camera.position.copy(cameraRig);
@@ -1052,6 +566,23 @@ function updateHealthDisplay() {
   opponentTrailNode.style.width = `${opponentHealth}%`;
   document.querySelector("#player-percent").textContent = `${Math.ceil(playerHealth)}%`;
   document.querySelector("#opponent-percent").textContent = `${Math.ceil(opponentHealth)}%`;
+
+  if (playerSuperFill && opponentSuperFill) {
+    const playerMeter = clamp(player.superMeter ?? 0, 0, 100);
+    const opponentMeter = clamp(opponent.superMeter ?? 0, 0, 100);
+    const playerReady = canUseSpecial(player);
+    const opponentReady = canUseSpecial(opponent);
+    playerSuperFill.style.width = `${playerMeter}%`;
+    opponentSuperFill.style.width = `${opponentMeter}%`;
+    playerSuperPercent.textContent = `${Math.floor(playerMeter)}%`;
+    opponentSuperPercent.textContent = `${Math.floor(opponentMeter)}%`;
+    playerSuperTrack.classList.toggle("ready", playerReady);
+    playerSuperBadge.classList.toggle("ready", playerReady);
+    opponentSuperTrack.classList.toggle("ready", opponentReady);
+    opponentSuperBadge.classList.toggle("ready", opponentReady);
+    if (touchSpecialButton) touchSpecialButton.classList.toggle("ready", playerReady);
+  }
+
   timerNode.textContent = `${Math.ceil(elapsed)}`;
   document.querySelector("#round-status").textContent = `${tournament.roundLabel} · ${tournament.roundWins.player}–${tournament.roundWins.cpu}`;
 }
@@ -1171,9 +702,16 @@ function contactPoint(attacker, target, attack) {
   if (target.airborne || target.landingTime > 0) {
     return new THREE.Vector3(target.x - target.facing * 0.55, target.y + 0.5, target.z);
   }
+  const heightScale = target.definition?.height || 1;
+  let contactHeight = 1.4;
+  if (kick) {
+    if (attack.limb === "leftKick") contactHeight = 1.52 * heightScale;
+    else if (attack.comboMove === "heel" || attack.comboMove === "roundhouse") contactHeight = 1.38 * heightScale;
+    else contactHeight = 1.18 * heightScale;
+  }
   return new THREE.Vector3(
     target.x - attacker.facing * 0.28,
-    target.y + (kick ? 0.95 : 1.4),
+    target.y + contactHeight,
     target.z + clamp(attacker.z - target.z, -0.2, 0.2)
   );
 }
@@ -1182,14 +720,16 @@ function attackDefinition(combatant, kind, extra = {}) {
   const fast = combatant.definition.stats.speed;
   const power = combatant.definition.stats.power;
   const ranged = combatant.definition.stats.range;
-  const isKick = kind === "kick" || kind === "heavy" || kind === "spin";
+  const isKick = kind === "kick" || kind === "spin" || kind === "eco-spin" || kind === "axe-kick";
+  const isLimbKick = extra.limb === "leftKick" || extra.limb === "rightKick";
+  const isHeavy = kind === "heavy";
   const base = {
     kind,
     high: !extra.low,
-    damage: (kind === "heavy" ? 11 : isKick ? 7 : 6) + power * 0.7,
-    range: (kind === "heavy" ? 1.55 : isKick ? 1.3 : 1.08) + ranged * 0.12,
-    windup: kind === "heavy" ? 0.23 : 0.13,
-    duration: kind === "heavy" ? 0.48 : 0.33,
+    damage: (isHeavy ? 11 : isKick ? 8 : 6) + power * 0.7,
+    range: (isHeavy ? 1.55 : isKick ? 1.42 : 1.08) + ranged * 0.12,
+    windup: isHeavy ? 0.23 : 0.13,
+    duration: isHeavy ? 0.48 : isKick ? 0.36 : 0.33,
     launch: false,
     knockdown: false,
     unblockable: false,
@@ -1199,52 +739,75 @@ function attackDefinition(combatant, kind, extra = {}) {
   };
   base.height = extra.height || (extra.low ? "low" :
     kind === "punch" && extra.limb === "leftPunch" ? "high" : "mid");
-  base.windup = kind === "punch" ? 0.08 : Math.max(0.07, base.windup - fast * 0.012);
+  if (base.special) {
+    base.height = "high";
+    base.high = true;
+    base.unblockable = false;
+    base.activeStart = SPECIAL_FRAME_DATA.activeStart;
+    base.activeEnd = SPECIAL_FRAME_DATA.activeEnd;
+    base.windup = base.duration * SPECIAL_FRAME_DATA.startupEnd;
+  } else if (isKick || isLimbKick) {
+    base.activeStart = 0.30;
+    base.activeEnd = 0.55;
+    base.windup = base.duration * base.activeStart;
+  } else {
+    base.windup = kind === "punch" ? 0.08 : Math.max(0.07, base.windup - fast * 0.012);
+  }
   return base;
 }
 
 function queueAttack(combatant, kind, extra = {}) {
-  if (!matchActive || combatant.health <= 0 || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return false;
+  if (!matchActive || combatant.health <= 0 || combatant.stun > 0 || (combatant.recovery || 0) > 0 || combatant.airborne || combatant.landingTime > 0) return false;
   if (combatant.cooldown > 0) return false;
   const attack = attackDefinition(combatant, kind, extra);
   attack.damage *= combatant.difficulty?.damage || 1;
-  combatant.attack = { ...attack, age: 0, hit: false };
+  combatant.attack = { ...attack, age: 0, hit: false, rushed: false, recoveryTriggered: false, landedUnblocked: false };
+  combatant.lastAttackWasSpecial = Boolean(attack.special);
   combatant.cooldown = attack.duration + 0.04;
   combatant.blocking = false;
   combatant.guardMode = null;
-  sound.swing(attack.limb === "leftKick" || attack.limb === "rightKick");
+  if (!attack.special) sound.swing(attack.limb === "leftKick" || attack.limb === "rightKick");
   return true;
 }
 
 function getSpecial(combatant) {
   const id = combatant.definition.id;
-  const common = { damage: 15 + combatant.definition.stats.power, duration: 0.56, windup: 0.19, color: combatant.definition.accent, special: true, limb: id === "renzi" || id === "bonelli" ? "rightKick" : "rightPunch" };
+  const common = {
+    damage: 25,
+    duration: 0.90,
+    color: combatant.definition.accent,
+    special: true,
+    high: true,
+    unblockable: false,
+    limb: id === "renzi" || id === "bonelli" ? "rightKick" : "rightPunch"
+  };
   const details = {
-    meloni: { kind: "rush", range: 2.15, launch: true, damage: 13, windup: 0.1, duration: 0.45 },
-    salvini: { kind: "heavy", range: 1.7, knockdown: true, damage: 21, windup: 0.33, duration: 0.62, high: false },
-    tajani: { kind: "counter", range: 1.65, damage: 13, windup: 0.14, duration: 0.54, guard: true },
-    renzi: { kind: "spin", range: 1.9, damage: 16, windup: 0.15, duration: 0.62, launch: true },
-    calenda: { kind: "dossier", range: 7, damage: 16, windup: 0.22, duration: 0.58, projectile: true },
-    schlein: { kind: "palette", range: 6, damage: 14, windup: 0.17, duration: 0.52, projectile: true, launch: true },
-    conte: { kind: "decree", range: 4.4, damage: 17, windup: 0.2, duration: 0.5, projectile: true, unblockable: true },
-    bonelli: { kind: "eco-spin", range: 2, damage: 15, windup: 0.15, duration: 0.6, launch: true }
+    meloni: { kind: "rush", range: 2.15, launch: true, damage: 25, duration: 0.86 },
+    salvini: { kind: "heavy", range: 1.75, knockdown: true, damage: 28, duration: 0.94 },
+    tajani: { kind: "counter", range: 1.70, damage: 24, duration: 0.88, guard: true },
+    renzi: { kind: "spin", range: 1.95, damage: 26, duration: 0.90, launch: true },
+    calenda: { kind: "dossier", range: 7.0, damage: 26, duration: 0.90, projectile: true },
+    schlein: { kind: "palette", range: 6.2, damage: 24, duration: 0.88, projectile: true, launch: true },
+    conte: { kind: "decree", range: 5.0, damage: 27, duration: 0.90, projectile: true },
+    bonelli: { kind: "eco-spin", range: 2.0, damage: 25, duration: 0.90, launch: true }
   };
   return { ...common, ...details[id] };
 }
 
 function useSpecial(combatant) {
-  if (!matchActive || combatant.cooldown > 0 || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return false;
+  if (!combatant || !matchActive || combatant.cooldown > 0 || (combatant.recovery || 0) > 0 || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return false;
+  if (!spendSuperMeter(combatant, SUPER_METER_COST)) {
+    if (combatant.isPlayer) sound.emptyClick?.();
+    return false;
+  }
+  combatant.usedSpecialInRound = true;
+  if (typeof setSpecialReadyGlow === "function") setSpecialReadyGlow(combatant, false, combatant.animationTime || 0);
+  updateHealthDisplay();
   const special = getSpecial(combatant);
-  if (special.guard) combatant.blockTimer = 0.52;
-  if (special.kind === "rush") {
-    combatant.x += combatant.facing * 0.48;
-    combatant.root.position.x = combatant.x;
-  }
   queueAttack(combatant, special.kind, special);
+  sound.specialWindup?.();
   announceSpecial(combatant);
-  if (!special.projectile) {
-    spawnBurst(combatant, special.color, 16);
-  }
+  spawnBurst(combatant, "#fff0a8", 12);
   return true;
 }
 
@@ -1287,11 +850,11 @@ function consumeBufferedAttack(combatant) {
   } else if (code === "u-u-i") {
     queueAttack(combatant, "combo-finisher", { damage: 14, range: 1.5, knockdown: true, duration: 0.4, limb: "rightPunch", comboMove: "straight" });
   } else if (code === "u-i-k" || code === "j-k-k") {
-    queueAttack(combatant, "kick", { damage: 13, range: 1.55, knockdown: true, duration: 0.46, limb: "rightKick", comboMove: code === "u-i-k" ? "roundhouse" : "heel" });
+    queueAttack(combatant, "kick", { damage: 13, range: 1.55, knockdown: true, duration: 0.48, limb: "rightKick", comboMove: code === "u-i-k" ? "roundhouse" : "heel" });
   } else if (key === "u" || key === "i") {
-    queueAttack(combatant, "punch", { ...(key === "i" ? { damage: heavy ? 10 : 8, range: 1.18 } : {}), height: key === "u" ? "high" : "mid", limb: key === "i" || cross ? "rightPunch" : "leftPunch" });
+    queueAttack(combatant, "punch", { ...(key === "i" ? { damage: heavy ? 10 : 8, range: 1.18, meterGain: 14 } : { meterGain: 8 }), height: key === "u" ? "high" : "mid", limb: key === "i" || cross ? "rightPunch" : "leftPunch" });
   } else {
-    queueAttack(combatant, "kick", { damage: snap ? 10 : 8, range: 1.4, low: key === "j", limb: key === "j" ? "leftKick" : "rightKick" });
+    queueAttack(combatant, "kick", { damage: snap ? 10 : 8, range: 1.4, low: key === "j", duration: key === "j" ? 0.36 : 0.42, meterGain: key === "j" ? 8 : 14, limb: key === "j" ? "leftKick" : "rightKick" });
   }
 }
 
@@ -1331,9 +894,18 @@ function updateComboBadge(target) {
 
 function tryHit(attacker, target) {
   const attack = attacker.attack;
-  if (!attack || attack.hit || attack.age < attack.windup) return;
-  attack.hit = true;
+  if (!attack || attack.hit) return;
+
+  const isWindowed = typeof attack.activeStart === "number" && typeof attack.activeEnd === "number";
+  if (isWindowed) {
+    if (!isKickHitboxActive(attack)) return;
+  } else {
+    if (attack.age < attack.windup) return;
+    attack.hit = true;
+  }
+
   if (attack.projectile) {
+    attack.hit = true;
     spawnBallot(
       attacker.x + attacker.facing * 0.75,
       attacker.y + 1.65,
@@ -1348,13 +920,22 @@ function tryHit(attacker, target) {
   const dx = Math.abs(attacker.x - target.x);
   const dz = Math.abs(attacker.z - target.z);
   if (dx > attack.range || dz > 0.95 || (target.airborne && target.y > 2.2)) return;
+  attack.hit = true;
   resolveCombatImpact(attacker, target, attack, contactPoint(attacker, target, attack));
 }
 
 function resolveCombatImpact(attacker, target, attack, point) {
-  const outcome = defenseOutcome(target, attack);
+  const interruptedSpecial = interruptSpecialStartup(target);
+  const outcome = interruptedSpecial ? "hit" : defenseOutcome(target, attack);
   if (outcome === "sidestep" || outcome === "duck") {
     spawnCallout(outcome === "duck" ? "SCHIVATA BASSA!" : "SCHIVATA!", target.x, target.y + 2.4, target.z);
+    if (attack.special) {
+      attacker.recovery = SPECIAL_FRAME_DATA.whiffRecoverySeconds;
+      attacker.cooldown = Math.max(attacker.cooldown, SPECIAL_FRAME_DATA.whiffRecoverySeconds);
+      attacker.blocking = false;
+      attacker.guardMode = null;
+      attack.recoveryTriggered = true;
+    }
     return;
   }
   attack.connected = true;
@@ -1367,26 +948,53 @@ function resolveCombatImpact(attacker, target, attack, point) {
     attacker.reactionTime = 0.6;
     attacker.vx = -attacker.facing * 1.4;
     if (attacker.input) clearComboInput(attacker.input);
+    addSuperMeter(target, METER_GAIN.block);
     spawnCallout("PARRIED! MOZIONE D'ORDINE!", target.x, target.y + 2.65, target.z);
     spawnImpact(point, { blocked: true, direction: attacker.facing });
     sound.impact({ blocked: true });
+    updateHealthDisplay();
     hitStop = Math.max(hitStop, 0.06);
     return;
   }
 
   const direction = attack.projectile ? Math.sign(attack.vx) : attacker.facing;
   const targetAirborne = target.airborne;
-  const blocked = outcome === "block";
-  const counter = !blocked && isCounterHit(target);
-  const damage = attack.damage * (blocked ? 0.15 : counter ? 1.35 : 1);
+  const counter = interruptedSpecial || (outcome !== "block" && isCounterHit(target));
+  const blocked = outcome === "block" && !(attack.special && counter);
+
+  let damage;
+  if (attack.special) {
+    damage = computeSpecialDamage(attack.damage, {
+      blocked,
+      counterHit: counter,
+      targetAirborne: Boolean(targetAirborne || target.y > 0.25)
+    });
+  } else {
+    damage = attack.damage * (blocked ? 0.15 : counter ? 1.35 : 1);
+  }
+
   recordCombatHit(attacker, target, damage, attack, blocked);
+  applyCombatMeter(attacker, target, { attack, blocked, counterHit: counter });
+
+  if (attack.special) {
+    if (blocked) {
+      attacker.recovery = SPECIAL_FRAME_DATA.whiffRecoverySeconds;
+      attacker.cooldown = Math.max(attacker.cooldown, SPECIAL_FRAME_DATA.whiffRecoverySeconds);
+      attacker.blocking = false;
+      attacker.guardMode = null;
+      attack.recoveryTriggered = true;
+    } else {
+      attack.landedUnblocked = true;
+    }
+  }
+
   if (!blocked) {
     target.guardMode = null;
     target.blocking = false;
     target.blockTimer = 0;
     target.parryTimer = 0;
   }
-  target.stun = blocked ? 0.12 : 0.25;
+  target.stun = blocked ? 0.12 : counter ? 0.36 : 0.25;
   target.reactionTime = blocked ? 0.12 : 0.3;
   target.vx = direction * (blocked ? 0.5 : attack.knockdown ? 4.4 : attack.launch ? 0.8 : targetAirborne ? 0.15 : 2.2);
   const launches = !blocked && (attack.launch || (counter && attack.knockdown));
@@ -1405,6 +1013,15 @@ function resolveCombatImpact(attacker, target, attack, point) {
   shake = Math.max(shake, !blocked && attack.knockdown ? 0.38 : 0.22);
   if (!blocked && (attack.launch || attack.knockdown || attack.kind === "heavy")) {
     cameraTilt = direction * (attack.launch ? 0.045 : 0.03);
+  }
+  if (typeof dynamicCamera !== "undefined") {
+    dynamicCamera.triggerImpact({
+      launch: launches,
+      counter,
+      knockdown: !blocked && attack.knockdown,
+      heavy: attack.kind === "heavy" || attack.special,
+      direction
+    });
   }
   spawnCallout(blocked ? "BLOCCATO!" : counter ? "COUNTER HIT!" : attack.unblockable && attack.projectile ? "VETO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.65, target.z);
   spawnImpact(point, {
@@ -1425,7 +1042,11 @@ function finishMatch(winner, reason = "knockout") {
   clearInputs();
   updateTouchVisibility();
   sound.stopMatch();
-  if (reason === "knockout") sound.knockout();
+  if (reason === "knockout") {
+    sound.knockout();
+    koSlowMo = 0.85;
+    if (typeof dynamicCamera !== "undefined") dynamicCamera.triggerKO(winner.facing);
+  }
   const loser = winner === player ? opponent : player;
   winner.attack = null;
   loser.attack = null;
@@ -1485,7 +1106,13 @@ function updateAI(dt) {
   if (!opponent || !player || opponent.health <= 0 || player.health <= 0) return;
   const ai = opponent;
   const difficulty = ai.difficulty;
-  if (ai.airborne || ai.landingTime > 0 || ai.stun > 0) return;
+  if (ai.airborne || ai.landingTime > 0 || ai.stun > 0 || (ai.recovery || 0) > 0) {
+    if ((ai.recovery || 0) > 0) {
+      ai.blocking = false;
+      ai.guardMode = null;
+    }
+    return;
+  }
   const dx = player.x - ai.x;
   const dz = player.z - ai.z;
   const distance = Math.abs(dx);
@@ -1539,7 +1166,7 @@ function updateAI(dt) {
     case "ATTACK":
       if (ai.aiCombo < difficulty.combo && ai.cooldown <= 0 && ai.stun <= 0 && !(difficulty.stage >= 3 && ai.blockTimer > 0)) {
         const missed = player.attack && player.attack.hit && !player.attack.connected && distance < 1.8;
-        if (difficulty.special && Math.random() < difficulty.special && (missed || ai.aiCombo > 0)) useSpecial(ai);
+        if (difficulty.special && canAICastSpecial(ai) && Math.random() < difficulty.special && (missed || ai.aiCombo > 0)) useSpecial(ai);
         else if (difficulty.launcher && Math.random() < difficulty.launcher && (missed || ai.aiCombo > 0)) {
           queueAttack(ai, "launcher", { damage: 10, range: 1.38, windup: 0.17, duration: 0.42, launch: true, limb: "rightPunch" });
         } else {
@@ -1568,7 +1195,7 @@ function updateAI(dt) {
       setAIState("IDLE");
   }
 
-  ai.blocking = ai.blockTimer > 0;
+  ai.blocking = ai.blockTimer > 0 && !(ai.attack?.special && ai.attack.age < ai.attack.windup);
   ai.guardMode = ai.blocking ? "standing" : null;
   if (distance > 1.7) ai.vz += clamp(dz, -1, 1) * 0.55;
 }
@@ -1579,15 +1206,16 @@ function movePlayer(dt) {
   let direction = 0;
   if (inputState.has("left")) direction -= 1;
   if (inputState.has("right")) direction += 1;
-  const canGuard = !player.airborne && player.landingTime <= 0 && !player.attack &&
+  const inRecovery = (player.recovery || 0) > 0;
+  const canGuard = !inRecovery && !player.airborne && player.landingTime <= 0 && !player.attack &&
     player.parryTimer <= 0 && (player.stun <= 0 || player.blocking);
   const away = direction === -player.facing;
   const lowGuard = inputState.has("down") && (away || inputState.has("guard"));
   player.guardMode = canGuard && (away || inputState.has("guard") || (direction === 0 && !inputState.has("down"))) ?
     (lowGuard ? "low" : "standing") : null;
-  if (player.blockTimer > 0 && !player.airborne) player.guardMode = "standing";
+  if (!inRecovery && player.blockTimer > 0 && !player.airborne && !player.attack?.special) player.guardMode = "standing";
   player.blocking = Boolean(player.guardMode);
-  if (player.stun > 0 || player.airborne || player.landingTime > 0 || player.parryTimer > 0) return;
+  if (player.stun > 0 || inRecovery || player.airborne || player.landingTime > 0 || player.parryTimer > 0) return;
   if (direction) {
     player.vx += direction * player.definition.stats.speed * 0.38;
   }
@@ -1673,6 +1301,9 @@ function poseFighter(combatant, dt, opponentBody = null) {
   const guard = combatant.blocking ? 0.3 : 0;
   const sidestep = combatant.dodgeTimer > 0 && Math.abs(combatant.vz) > 0.3 && !combatant.airborne;
   const side = sidestep ? Math.sign(combatant.vz) : 0;
+  const baseKnee = 0.14 + (bounce + 1) * 0.06;
+  const leftKneeBend = baseKnee + Math.max(0, -step) * 0.42;
+  const rightKneeBend = baseKnee + Math.max(0, step) * 0.42;
 
   joints.hips.rotation.set(0, 0, step * 0.05 + bounce * 0.035);
   joints.torso.rotation.set(0, -0.1, (definition.id === "schlein" ? -0.12 : -0.06) + bounce * 0.025);
@@ -1683,17 +1314,25 @@ function poseFighter(combatant, dt, opponentBody = null) {
   joints.rightShoulder.rotation.set(-0.2, 0, 1.05 + guard - bounce * 0.06);
   joints.leftElbow.rotation.set(-0.2, 0, 1.5 + guard + bounce * 0.08);
   joints.rightElbow.rotation.set(-0.2, 0, 1.2 + guard - bounce * 0.08);
-  joints.leftHip.rotation.set(step * 0.2, 0, -wide + step * 0.24 + bounce * 0.04);
-  joints.rightHip.rotation.set(-step * 0.2, 0, wide - step * 0.24 - bounce * 0.04);
-  joints.leftKnee.rotation.set(Math.max(0, -step) * 0.4 + (bounce + 1) * 0.06, 0, 0.16);
-  joints.rightKnee.rotation.set(Math.max(0, step) * 0.4 + (bounce + 1) * 0.06, 0, -0.16);
-  combatant.model.position.set(0, (bounce + 1) * 0.025, 0);
+  joints.leftHip.rotation.set(-leftKneeBend * 0.48 + step * 0.2, 0, -wide + step * 0.24 + bounce * 0.04);
+  joints.rightHip.rotation.set(-rightKneeBend * 0.48 - step * 0.2, 0, wide - step * 0.24 - bounce * 0.04);
+  joints.leftKnee.rotation.set(leftKneeBend, 0, 0.16);
+  joints.rightKnee.rotation.set(rightKneeBend, 0, -0.16);
+  if (joints.leftAnkle) joints.leftAnkle.rotation.set(0, 0, 0);
+  if (joints.rightAnkle) joints.rightAnkle.rotation.set(0, 0, 0);
+  combatant.model.position.set(0, 0, 0);
   combatant.prop.rotation.z = -2.2;
+
+  let support = "both";
+  let lift = 0;
+  let handledKick = false;
+
   if (combatant.guardMode === "low") {
+    joints.leftHip.rotation.x -= 0.38;
+    joints.rightHip.rotation.x -= 0.38;
     joints.leftKnee.rotation.x += 0.75;
     joints.rightKnee.rotation.x += 0.75;
     joints.torso.rotation.z -= 0.2;
-    combatant.model.position.y -= 0.25;
   } else if (combatant.parryPose > 0) {
     joints.leftShoulder.rotation.z = 1.9;
     joints.leftElbow.rotation.z = 0.45;
@@ -1706,26 +1345,30 @@ function poseFighter(combatant, dt, opponentBody = null) {
     joints.torso.rotation.x += side * 0.22 * dip;
     joints.torso.rotation.z -= side * 0.13 * dip;
     joints.hips.rotation.y += side * 0.3 * dip;
+    joints.leftHip.rotation.x -= 0.16 * dip;
+    joints.rightHip.rotation.x -= 0.16 * dip;
     joints.leftKnee.rotation.x += 0.32 * dip;
     joints.rightKnee.rotation.x += 0.32 * dip;
-    combatant.model.position.y -= 0.09 * dip;
     combatant.root.rotation.y = side * 0.18 * dip;
   }
   if (attack && !combatant.airborne && combatant.landingTime <= 0) {
-    const progress = clamp(attack.age / attack.duration, 0, 1);
-    const impact = clamp(attack.windup / attack.duration, 0.01, 0.95);
-    const holdEnd = Math.min(impact + 0.065 / attack.duration, 0.98);
+    const progress = clamp(attack.age / Math.max(attack.duration, 0.001), 0, 1);
+    const impact = clamp(attack.windup / Math.max(attack.duration, 0.001), 0.01, 0.95);
+    const holdEnd = Math.min(impact + 0.065 / Math.max(attack.duration, 0.001), 0.98);
     const strike = sampleKeyframes(progress, [
       [0, 0], [impact * 0.6, 0], [impact, 1], [holdEnd, 1], [1, 0]
     ]);
     const crouch = sampleKeyframes(progress, [
       [0, 0], [impact * 0.6, 1], [impact, 0], [1, 0]
     ]);
-    joints.torso.rotation.y -= crouch * 0.32;
-    joints.hips.rotation.y += crouch * 0.22;
-    joints.leftKnee.rotation.x += crouch * 0.25 + strike * 0.08;
-    joints.rightKnee.rotation.x += crouch * 0.12 + strike * 0.3;
-    combatant.model.position.x += strike * 0.13 - crouch * 0.1;
+    const isKickLimb = attack.limb === "leftKick" || attack.limb === "rightKick";
+    if (!isKickLimb) {
+      joints.torso.rotation.y -= crouch * 0.32;
+      joints.hips.rotation.y += crouch * 0.22;
+      joints.leftKnee.rotation.x += crouch * 0.25 + strike * 0.08;
+      joints.rightKnee.rotation.x += crouch * 0.12 + strike * 0.3;
+      combatant.model.position.x += strike * 0.13 - crouch * 0.1;
+    }
     const punch = (side, angle = 1.45, amount = strike) => {
       const shoulder = side === "left" ? joints.leftShoulder : joints.rightShoulder;
       const elbow = side === "left" ? joints.leftElbow : joints.rightElbow;
@@ -1736,32 +1379,22 @@ function poseFighter(combatant, dt, opponentBody = null) {
       joints.torso.rotation.y = -0.1 - crouch * 0.32 + amount * 0.65;
       joints.torso.rotation.z -= amount * 0.12;
     };
-    const kick = (side) => {
-      const hip = side === "left" ? joints.leftHip : joints.rightHip;
-      const knee = side === "left" ? joints.leftKnee : joints.rightKnee;
-      const support = side === "left" ? joints.rightKnee : joints.leftKnee;
-      const roundhouse = side === "left";
-      const chamber = sampleKeyframes(progress, [
-        [0, 0], [impact * 0.55, 1], [impact, 0.15], [holdEnd, 0.15], [1, 0]
-      ]);
-      const extension = sampleKeyframes(progress, [
-        [0, 0], [impact * 0.55, 0], [impact, 1], [holdEnd, 1], [1, 0]
-      ]);
-      hip.rotation.z = THREE.MathUtils.lerp(hip.rotation.z, roundhouse ? 1.8 : 1.6, strike + chamber * (1 - strike) * 0.55);
-      hip.rotation.y = (roundhouse ? -0.85 : -0.15) * strike;
-      hip.rotation.x = (roundhouse ? -0.4 : 0.1) * strike;
-      knee.rotation.z = THREE.MathUtils.lerp(knee.rotation.z, -1.1, chamber);
-      knee.rotation.z = THREE.MathUtils.lerp(knee.rotation.z, 0.08, extension);
-      support.rotation.x += 0.45 * strike;
-      joints.hips.rotation.y += (roundhouse ? 0.45 : 0.15) * strike;
-      joints.torso.rotation.z -= strike * 0.38;
-    };
 
     const uppercut = attack.kind === "launcher" || (attack.special && definition.id === "meloni");
     if (attack.limb === "leftPunch") punch("left");
     else if (attack.limb === "rightPunch" && !uppercut) punch("right");
-    else if (attack.limb === "leftKick") kick("left");
-    else if (attack.limb === "rightKick") kick("right");
+    else if (attack.limb === "leftKick") {
+      applyKickAnimation(joints, { style: "roundhouse", side: "left", progress });
+      handledKick = true;
+    } else if (attack.limb === "rightKick") {
+      const style = (attack.comboMove === "heel" || attack.comboMove === "roundhouse")
+        ? "axe"
+        : (attack.kind === "spin" || attack.kind === "eco-spin")
+          ? "roundhouse"
+          : "side";
+      applyKickAnimation(joints, { style, side: "right", progress });
+      handledKick = true;
+    }
 
     if (uppercut) {
       const rise = sampleKeyframes(progress, [
@@ -1769,33 +1402,20 @@ function poseFighter(combatant, dt, opponentBody = null) {
         [holdEnd, 1], [1, 0]
       ]);
       punch("right", 2.55, rise);
-      joints.leftHip.rotation.x -= crouch * 0.65;
-      joints.rightHip.rotation.x -= crouch * 0.65;
-      joints.leftKnee.rotation.x += crouch * 1.2;
-      joints.rightKnee.rotation.x += crouch * 1.2;
+      joints.leftHip.rotation.x -= crouch * 0.42;
+      joints.rightHip.rotation.x -= crouch * 0.42;
+      joints.leftKnee.rotation.x += crouch * 0.80;
+      joints.rightKnee.rotation.x += crouch * 0.80;
       joints.hips.rotation.z -= crouch * 0.18;
-      combatant.model.position.y += rise * 0.25 - crouch * 0.15;
+      lift = rise * 0.10;
     }
 
     if (attack.comboMove === "straight") {
       joints.torso.rotation.z -= strike * 0.2;
       combatant.model.position.x += strike * 0.18;
-    } else if (attack.comboMove === "roundhouse") {
-      combatant.root.rotation.y = sampleKeyframes(progress, [[0, 0], [impact, Math.PI], [1, Math.PI * 2]]);
-      joints.rightHip.rotation.z = THREE.MathUtils.lerp(joints.rightHip.rotation.z, 1.95, strike);
-    } else if (attack.comboMove === "heel") {
-      combatant.model.position.y += Math.sin(progress * Math.PI) * 0.3;
-      joints.rightHip.rotation.z = THREE.MathUtils.lerp(joints.rightHip.rotation.z, 2.4, strike);
-      joints.torso.rotation.z -= strike * 0.2;
     }
 
     if (attack.special) {
-      if (definition.id === "renzi" || definition.id === "bonelli") {
-        combatant.root.rotation.y = sampleKeyframes(progress, [
-          [0, 0], [impact * 0.25, 0], [impact, Math.PI],
-          [1, Math.PI * 2]
-        ]);
-      }
       switch (definition.id) {
         case "meloni":
           joints.leftShoulder.rotation.z = THREE.MathUtils.lerp(joints.leftShoulder.rotation.z - crouch * 0.4, 1.65, strike);
@@ -1812,7 +1432,7 @@ function poseFighter(combatant, dt, opponentBody = null) {
           joints.rightElbow.rotation.z = THREE.MathUtils.lerp(1.2, 0.2, strike);
           joints.torso.rotation.z += crouch * 0.2 - strike * 0.24;
           joints.leftShoulder.rotation.z += crouch * 0.8;
-          combatant.model.position.y += Math.sin(progress * Math.PI) * 0.24;
+          lift = Math.sin(progress * Math.PI) * 0.20;
           joints.leftKnee.rotation.x += Math.sin(progress * Math.PI) * 0.45;
           break;
         case "tajani":
@@ -1838,7 +1458,7 @@ function poseFighter(combatant, dt, opponentBody = null) {
           joints.rightShoulder.rotation.x -= strike * 0.9;
           joints.rightElbow.rotation.y += Math.sin(attack.age * 20) * strike * 0.5;
           joints.torso.rotation.z += crouch * 0.2 - strike * 0.2;
-          combatant.model.position.y += strike * 0.12 - crouch * 0.08;
+          lift = Math.max(0, strike * 0.10 - crouch * 0.04);
           break;
         case "conte":
           joints.rightShoulder.rotation.z -= crouch * 0.45;
@@ -1858,8 +1478,15 @@ function poseFighter(combatant, dt, opponentBody = null) {
     }
   }
 
+  if (!handledKick) {
+    updateGroundedRig(joints, { support, lift });
+  }
+
   const recoil = clamp(combatant.reactionTime / 0.3, 0, 1);
   joints.torso.rotation.z += recoil * 0.55;
+  if ((combatant.recovery || 0) > 0) {
+    joints.torso.rotation.z -= clamp(combatant.recovery / SPECIAL_FRAME_DATA.whiffRecoverySeconds, 0, 1) * 0.22;
+  }
   joints.head.rotation.z += recoil * 0.2;
   combatant.model.rotation.z = combatant.airRotation;
   combatant.model.position.y += Math.abs(Math.sin(combatant.airRotation)) * 0.38 * definition.height;
@@ -1894,6 +1521,7 @@ function poseFighter(combatant, dt, opponentBody = null) {
 function updateCombatant(combatant, dt, opponentBody) {
   if (!combatant) return;
   combatant.cooldown = Math.max(0, combatant.cooldown - dt);
+  combatant.recovery = Math.max(0, (combatant.recovery || 0) - dt);
   if (combatant.input) {
     advanceInputClock(combatant.input, dt);
     if (combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) clearComboInput(combatant.input);
@@ -1913,7 +1541,20 @@ function updateCombatant(combatant, dt, opponentBody) {
 
   if (combatant.attack) {
     combatant.attack.age += dt;
+    const progress = combatant.attack.age / Math.max(combatant.attack.duration, 0.001);
+    if (combatant.attack.special && combatant.attack.kind === "rush" && !combatant.attack.rushed && progress >= SPECIAL_FRAME_DATA.activeStart) {
+      combatant.attack.rushed = true;
+      combatant.x += combatant.facing * 0.48;
+      combatant.root.position.x = combatant.x;
+    }
     tryHit(combatant, opponentBody);
+    if (combatant.attack && combatant.attack.special && !combatant.attack.recoveryTriggered && !combatant.attack.landedUnblocked && progress >= SPECIAL_FRAME_DATA.activeEnd) {
+      combatant.attack.recoveryTriggered = true;
+      combatant.recovery = SPECIAL_FRAME_DATA.whiffRecoverySeconds;
+      combatant.cooldown = Math.max(combatant.cooldown, SPECIAL_FRAME_DATA.whiffRecoverySeconds);
+      combatant.blocking = false;
+      combatant.guardMode = null;
+    }
     if (combatant.attack && combatant.attack.age > combatant.attack.duration) {
       combatant.attack = null;
       if (combatant.input) endComboAttack(combatant.input);
@@ -2119,10 +1760,17 @@ function update(dt) {
     updateAI(dt);
     updateCombatant(player, dt, opponent);
     if (matchActive && hitStop <= 0) updateCombatant(opponent, dt, player);
+    const pStartupFlash = Boolean(player?.attack?.special && player.attack.age < player.attack.windup);
+    const oStartupFlash = Boolean(opponent?.attack?.special && opponent.attack.age < opponent.attack.windup);
+    setSpecialReadyGlow(player, canUseSpecial(player) || pStartupFlash, player?.animationTime || 0);
+    setSpecialReadyGlow(opponent, canUseSpecial(opponent) || oStartupFlash, opponent?.animationTime || 0);
     checkTimer(dt);
   } else if (victory) {
     updateVictory(dt);
   }
+  arena.update(dt, [player, opponent], (bx, by, bz, dir) => {
+    spawnBallot(bx, by, bz, dir, "#f6efdc", 1.15);
+  });
   updateBallots(dt);
   updateParticles(dt);
   updateSidestepGhosts(dt);
@@ -2142,45 +1790,7 @@ function update(dt) {
 }
 
 function updateCamera(dt) {
-  const focus = new THREE.Vector3(0, 1.5, -0.5);
-  let distance = 17.4;
-  let desired;
-  if (victory) {
-    const winner = victory.winner;
-    const maxOffset = Math.min(0.8, camera.aspect * 0.5);
-    const offset = clamp((victory.loser.x - winner.x) * 0.5, -maxOffset, maxOffset);
-    focus.set(winner.x + offset, winner.y + 1.55 * winner.definition.height, winner.z);
-    distance = Math.max(4.5, 1.3 / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
-    desired = new THREE.Vector3(focus.x + 0.2, winner.y + 0.95, winner.z + distance);
-  } else if (player && opponent) {
-    focus.set(
-      (player.x + opponent.x) / 2,
-      1.45 + Math.max(player.y, opponent.y) * 0.35,
-      (player.z + opponent.z) / 2
-    );
-    const span = Math.abs(player.x - opponent.x) + Math.abs(player.z - opponent.z) * 0.3;
-    const horizontalFit = (span / 2 + 1.35) /
-      (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
-    distance = clamp(Math.max(8.7 + span * 0.65, horizontalFit + 2.5), 9.5, 48);
-  }
-  if (!desired) {
-    const lateStage = tournament && tournament.currentStage >= 6;
-    desired = !tournament
-      ? new THREE.Vector3(0, 7.4, 17.4)
-      : new THREE.Vector3(focus.x + (lateStage ? 0.5 : 0), focus.y + distance * (lateStage ? 0.22 : 0.3), focus.z + distance);
-  }
-  const smoothing = 1 - Math.exp(-3.5 * dt);
-  cameraRig.lerp(desired, smoothing);
-  cameraTarget.lerp(focus, smoothing);
-  camera.position.copy(cameraRig);
-  if (shake > 0) {
-    camera.position.x += random(-shake, shake);
-    camera.position.y += random(-shake * 0.4, shake * 0.4);
-  }
-  camera.lookAt(cameraTarget);
-  camera.rotateZ(cameraTilt + (matchActive && tournament.currentStage >= 6 ? 0.025 : 0));
-  shake = Math.max(0, shake - dt * 1.8);
-  cameraTilt *= Math.exp(-6 * dt);
+  dynamicCamera.update(dt, { player, opponent, victory, koSlowMo });
 }
 
 function animate() {
@@ -2197,8 +1807,15 @@ function animate() {
   }
   const frozen = Math.min(hitStop, elapsedFrame);
   hitStop -= frozen;
-  update(Math.min(elapsedFrame - frozen, 0.04));
+  const simFrame = elapsedFrame - frozen;
+  let simDt = Math.min(simFrame, 0.04);
+  if (typeof koSlowMo !== "undefined" && koSlowMo > 0) {
+    koSlowMo = Math.max(0, koSlowMo - elapsedFrame);
+    simDt *= 0.28;
+  }
+  update(simDt);
   const visualDt = Math.min(elapsedFrame, 0.1);
+  if (typeof atmosphere !== "undefined") atmosphere.update(visualDt);
   updateCamera(visualDt);
   updateImpactEffects(visualDt);
   renderer.render(scene, camera);
@@ -2231,7 +1848,7 @@ function clearInputs() {
 }
 
 function sidestep(action) {
-  if (!player || player.stun > 0 || player.airborne || player.landingTime > 0 || player.attack) return;
+  if (!player || player.stun > 0 || (player.recovery || 0) > 0 || player.airborne || player.landingTime > 0 || player.attack) return;
   player.vz = (action === "up" ? -1 : 1) * 5.2;
   player.dodgeTimer = 0.36;
 }
@@ -2441,7 +2058,6 @@ musicToggle.addEventListener("click", () => {
   sound.setMusicEnabled(enabled);
 });
 
-createArena();
 buildRoster();
 updateTouchVisibility();
 animate();
