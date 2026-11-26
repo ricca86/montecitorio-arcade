@@ -1,6 +1,6 @@
 import * as THREE from "./vendor/three/three.module.min.js";
 import { fighters } from "./fighters.js";
-import { sound } from "./sound.js";
+import { sound } from "./sound-engine.js";
 import { TournamentManager, difficultyForStage, formatTournamentTime } from "./tournament.js";
 import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
 import { attackHeight, defenseOutcome, isCounterHit } from "./defense.js";
@@ -36,6 +36,7 @@ const announcer = document.querySelector("#announcer");
 const toast = document.querySelector("#signature-toast");
 const controllerToast = document.querySelector("#controller-toast");
 const startButton = document.querySelector("#start-button");
+const sfxToggle = document.querySelector("#sfx-toggle");
 const musicToggle = document.querySelector("#music-toggle");
 const touchToggle = document.querySelector("#touch-toggle");
 const touchControls = document.querySelector("#touch-controls");
@@ -52,7 +53,10 @@ const opponentSuperTrack = document.querySelector("#opponent-super-track");
 const opponentSuperFill = document.querySelector("#opponent-super-fill");
 const opponentSuperPercent = document.querySelector("#opponent-super-percent");
 const opponentSuperBadge = document.querySelector("#opponent-super-badge");
+const playerOrbsNode = document.querySelector("#player-orbs");
+const opponentOrbsNode = document.querySelector("#opponent-orbs");
 const touchSpecialButton = document.querySelector(".touch-special");
+const vsFlashNode = document.querySelector("#vs-flash");
 const timerNode = document.querySelector("#timer");
 
 const scene = new THREE.Scene();
@@ -94,8 +98,38 @@ const impactEffects = [];
 const sidestepGhosts = [];
 const callouts = [];
 const comicWords = ["RIBALTONE!", "VETO!", "FIDUCIA!", "QUORUM!"];
-const sparkGeometry = new THREE.OctahedronGeometry(0.07, 0);
-const ringGeometry = new THREE.RingGeometry(0.68, 0.82, 16);
+const sparkGeometry = new THREE.OctahedronGeometry(0.08, 0);
+const lineSparkGeometry = new THREE.BoxGeometry(0.026, 0.34, 0.026);
+const ringGeometry = new THREE.RingGeometry(0.58, 0.78, 28);
+
+function createLensFlareTexture() {
+  const size = 64;
+  const data = new Uint8ClampedArray(size * size * 4);
+  const half = (size - 1) * 0.5;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = (x - half) / half;
+      const dy = (y - half) / half;
+      const dist = Math.hypot(dx, dy);
+      const core = Math.exp(-dist * dist * 10);
+      const halo = Math.max(0, 1 - dist) ** 2.6 * 0.65;
+      const cross = Math.exp(-Math.abs(dx) * 14) * Math.max(0, 1 - Math.abs(dy)) +
+        Math.exp(-Math.abs(dy) * 14) * Math.max(0, 1 - Math.abs(dx));
+      const v = THREE.MathUtils.clamp(core + halo + cross * 0.55, 0, 1);
+      const idx = (y * size + x) * 4;
+      data[idx] = 255;
+      data[idx + 1] = Math.round(232 + 23 * core);
+      data[idx + 2] = Math.round(170 + 85 * core);
+      data[idx + 3] = Math.round(v * 255);
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+const lensFlareTexture = createLensFlareTexture();
 
 let selectedId = null;
 let player = null;
@@ -186,6 +220,11 @@ function createCombatant(definition, x, z, facing, isPlayer) {
   };
 }
 
+function statRowMarkup(label, value) {
+  const pct = clamp(Math.round((value / 5) * 100), 15, 100);
+  return `<div class="stat-bar-row"><span>${label}</span><span class="stat-track"><i style="width:${pct}%"></i></span></div>`;
+}
+
 function buildRoster() {
   rosterNode.innerHTML = "";
   fighters.forEach((fighter, index) => {
@@ -195,7 +234,10 @@ function buildRoster() {
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", "false");
     button.style.setProperty("--accent", fighter.color);
-    button.innerHTML = `<span class="portrait" aria-hidden="true">${fighter.initials}</span><strong>${fighter.name}</strong><small>SPD ${fighter.stats.speed} · POW ${fighter.stats.power} · RNG ${fighter.stats.range}</small>`;
+    button.innerHTML =
+      `<span class="card-cursor cursor-p1">1P</span><span class="card-cursor cursor-cpu">CPU</span>` +
+      `<div class="card-head"><span class="portrait" aria-hidden="true">${fighter.initials}</span><strong>${fighter.name}</strong></div>` +
+      `<div class="card-stats">${statRowMarkup("SPEED", fighter.stats.speed)}${statRowMarkup("POWER", fighter.stats.power)}${statRowMarkup("RHETORIC", fighter.stats.range)}</div>`;
     button.addEventListener("click", () => selectFighter(fighter.id, true));
     rosterNode.appendChild(button);
     if (index === 0 && !selectedId) selectedId = fighter.id;
@@ -208,21 +250,38 @@ function selectFighter(id, focusCard = false) {
   const fighter = fightersById.get(id);
   if (!fighter) return;
   if (focusCard) sound.select();
+  const selectedIndex = fighters.findIndex((entry) => entry.id === id);
+  const cpuIndex = (selectedIndex + 1) % fighters.length;
   [...rosterNode.children].forEach((card, index) => {
-    const selected = fighters[index].id === id;
+    const selected = index === selectedIndex;
+    const cpuTarget = index === cpuIndex;
     card.classList.toggle("selected", selected);
+    card.classList.toggle("cpu-selected", cpuTarget);
     card.setAttribute("aria-selected", String(selected));
     if (selected && focusCard) card.focus();
   });
+  const countNode = document.querySelector(".select-count");
+  if (countNode) countNode.textContent = `0${selectedIndex + 1} / 08`;
   document.querySelector("#detail-name").textContent = fighter.name;
   document.querySelector("#detail-move").textContent = `Signature move: ${fighter.special}`;
+  const detailStats = document.querySelector("#detail-stats");
+  if (detailStats) {
+    detailStats.innerHTML =
+      `${statRowMarkup("SPEED", fighter.stats.speed)}${statRowMarkup("POWER", fighter.stats.power)}${statRowMarkup("RHETORIC", fighter.stats.range)}`;
+  }
   startButton.disabled = false;
 }
 
-function showAnnouncer() {
-  announcer.querySelector("span").textContent = tournament.roundLabel;
+function showAnnouncer(headline = "ELEZIONI!", subline = tournament?.roundLabel || "ROUND 1", { ko = false, duration = 1.7 } = {}) {
+  const label = announcer.querySelector?.("span");
+  const strong = announcer.querySelector?.("strong");
+  if (label) label.textContent = subline;
+  if (strong) strong.textContent = headline;
+  announcer.classList.toggle("ko-slam", ko);
+  announcer.classList.remove("show");
+  if (typeof announcer.offsetWidth !== "undefined") void announcer.offsetWidth;
   announcer.classList.add("show");
-  announcerTimer = 1.7;
+  announcerTimer = duration;
 }
 
 function disposeFighter(combatant) {
@@ -244,6 +303,12 @@ function beginMatch() {
   tournament = new TournamentManager(selectedId);
   tournamentStartedAt = performance.now();
   selectScreen.classList.add("hidden");
+  if (vsFlashNode) {
+    vsFlashNode.classList.remove("hidden", "active");
+    void vsFlashNode.offsetWidth;
+    vsFlashNode.classList.add("active");
+    setTimeout(() => vsFlashNode.classList.add("hidden"), 420);
+  }
   showLadder();
 }
 
@@ -401,7 +466,7 @@ function clearCombatEffects() {
   for (const callout of callouts) callout.element.remove();
   callouts.length = 0;
   announcerTimer = 0;
-  announcer.classList.remove("show");
+  announcer.classList.remove("show", "ko-slam");
   toastTimer = 0;
   toast.classList.remove("show");
 }
@@ -562,10 +627,17 @@ function updateHealthDisplay() {
   const opponentHealth = clamp(opponent.health / (opponent.maxHealth || 100) * 100, 0, 100);
   playerHealthNode.style.width = `${playerHealth}%`;
   opponentHealthNode.style.width = `${opponentHealth}%`;
+  playerHealthNode.classList.toggle("low", playerHealth <= 25);
+  opponentHealthNode.classList.toggle("low", opponentHealth <= 25);
   playerTrailNode.style.width = `${playerHealth}%`;
   opponentTrailNode.style.width = `${opponentHealth}%`;
   document.querySelector("#player-percent").textContent = `${Math.ceil(playerHealth)}%`;
   document.querySelector("#opponent-percent").textContent = `${Math.ceil(opponentHealth)}%`;
+
+  if (playerOrbsNode && opponentOrbsNode && tournament?.roundWins) {
+    [...playerOrbsNode.children].forEach((orb, idx) => orb.classList.toggle("won", idx < tournament.roundWins.player));
+    [...opponentOrbsNode.children].forEach((orb, idx) => orb.classList.toggle("won", idx < tournament.roundWins.cpu));
+  }
 
   if (playerSuperFill && opponentSuperFill) {
     const playerMeter = clamp(player.superMeter ?? 0, 0, 100);
@@ -653,11 +725,22 @@ function spawnBurst(combatant, color = "#f4c96b", count = 12) {
   }
 }
 
-function spawnImpact(point, { launch = false, special = false, blocked = false, direction = 1 } = {}) {
-  const colors = blocked ? ["#51bfff", "#c5f5ff"] : special ? ["#ff3d42", "#ffba62"] :
-    launch ? ["#5cbfff", "#b8ecff"] : ["#ff8b19", "#fff285"];
-  const count = launch || special ? 18 : 12;
+function spawnImpact(point, { launch = false, counter = false, special = false, blocked = false, ko = false, direction = 1 } = {}) {
+  const highDrama = !blocked && (launch || counter || special || ko);
+  const colors = blocked
+    ? ["#38c8ff", "#7ff6ff", "#e2ffff"]
+    : ko
+      ? ["#ff263c", "#ff9424", "#ffe86b"]
+      : special || counter
+        ? ["#ff3045", "#ff9e24", "#ffe46b"]
+        : launch
+          ? ["#ff4a42", "#ffd24d", "#ff9c38"]
+          : ["#ffd84d", "#ff9b19", "#fff29e"];
+  const count = ko ? 32 : highDrama ? 18 : 14;
+  const duration = ko ? 0.52 : highDrama ? 0.34 : 0.25;
+
   for (let i = 0; i < count; i += 1) {
+    const isLine = i % 2 === 1;
     const material = new THREE.MeshBasicMaterial({
       color: colors[i % colors.length],
       transparent: true,
@@ -665,35 +748,81 @@ function spawnImpact(point, { launch = false, special = false, blocked = false, 
       depthWrite: false,
       toneMapped: false
     });
-    const mesh = new THREE.Mesh(sparkGeometry, material);
+    const mesh = new THREE.Mesh(isLine ? lineSparkGeometry : sparkGeometry, material);
     mesh.position.copy(point);
-    mesh.scale.set(random(0.45, 0.9), random(1.4, 2.8), 0.6);
-    mesh.rotation.z = random(-Math.PI, Math.PI);
+    const phi = random(0, Math.PI * 2);
+    const elevation = random(-0.65, 0.95);
+    const speed = ko ? random(5.5, 11.5) : highDrama ? random(4.2, 8.8) : random(3.4, 6.8);
+    const velocity = new THREE.Vector3(
+      Math.cos(phi) * speed * 0.85 + direction * random(0.8, 2.8),
+      elevation * speed + random(0.4, 2.2),
+      Math.sin(phi) * speed * 0.72
+    );
+    const baseScale = isLine
+      ? new THREE.Vector3(random(0.8, 1.35), random(1.1, 2.2), random(0.8, 1.35))
+      : new THREE.Vector3(random(0.85, 1.5), random(0.85, 1.5), random(0.85, 1.5));
+    mesh.scale.copy(baseScale);
+    if (velocity.lengthSq() > 0.001) {
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), velocity.clone().normalize());
+    }
     scene.add(mesh);
-    const life = random(0.22, 0.42);
     impactEffects.push({
       mesh,
       kind: "spark",
-      velocity: new THREE.Vector3(random(-2.2, 2.2) + direction, random(-0.4, 3.2), random(-1.5, 1.5)),
-      life,
-      duration: life
+      velocity,
+      baseScale,
+      life: duration,
+      duration
     });
   }
-  if (launch || special) {
-    const material = new THREE.MeshBasicMaterial({
-      color: special ? "#ff3a42" : "#49b8ff",
-      side: THREE.DoubleSide,
+
+  if (highDrama) {
+    // Expanding crimson & gold Tekken energy shockwave rings
+    for (const [idx, ringColor] of (ko || special || counter ? ["#ff2c40", "#ffd447"] : ["#ff4a3d", "#ffe066"]).entries()) {
+      const material = new THREE.MeshBasicMaterial({
+        color: ringColor,
+        side: THREE.DoubleSide,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
+      });
+      const mesh = new THREE.Mesh(ringGeometry, material);
+      mesh.position.copy(point);
+      mesh.quaternion.copy(camera.quaternion);
+      mesh.scale.setScalar(0.22);
+      scene.add(mesh);
+      const ringDuration = (ko ? 0.56 : 0.38) - idx * 0.06;
+      impactEffects.push({
+        mesh,
+        kind: "ring",
+        maxScale: ko ? 3.8 : 2.5 - idx * 0.45,
+        life: ringDuration,
+        duration: ringDuration
+      });
+    }
+
+    // Bright additive lens-flare impact flash sprite
+    const flareMat = new THREE.SpriteMaterial({
+      map: lensFlareTexture,
+      color: ko || special ? "#ff9e5e" : "#ffe694",
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       toneMapped: false
     });
-    const mesh = new THREE.Mesh(ringGeometry, material);
-    mesh.position.copy(point);
-    mesh.quaternion.copy(camera.quaternion);
-    mesh.scale.setScalar(0.2);
-    scene.add(mesh);
-    impactEffects.push({ mesh, kind: "ring", life: 0.38, duration: 0.38 });
+    const flare = new THREE.Sprite(flareMat);
+    flare.position.copy(point);
+    const baseFlare = ko ? 3.2 : 2.1;
+    flare.scale.set(baseFlare, baseFlare, 1);
+    scene.add(flare);
+    impactEffects.push({
+      mesh: flare,
+      kind: "flare",
+      baseSize: baseFlare,
+      life: ko ? 0.34 : 0.22,
+      duration: ko ? 0.34 : 0.22
+    });
   }
 }
 
@@ -766,7 +895,15 @@ function queueAttack(combatant, kind, extra = {}) {
   combatant.cooldown = attack.duration + 0.04;
   combatant.blocking = false;
   combatant.guardMode = null;
-  if (!attack.special) sound.swing(attack.limb === "leftKick" || attack.limb === "rightKick");
+  if (!attack.special) {
+    const isHeavySwing = attack.kind === "heavy" || attack.kind === "launcher" || attack.kind === "combo-finisher" ||
+      attack.limb === "rightPunch" || attack.limb === "rightKick";
+    sound.swing({
+      heavy: isHeavySwing,
+      kick: attack.limb === "leftKick" || attack.limb === "rightKick",
+      pan: clamp((combatant.x || 0) / 6, -0.7, 0.7)
+    });
+  }
   return true;
 }
 
@@ -951,7 +1088,8 @@ function resolveCombatImpact(attacker, target, attack, point) {
     addSuperMeter(target, METER_GAIN.block);
     spawnCallout("PARRIED! MOZIONE D'ORDINE!", target.x, target.y + 2.65, target.z);
     spawnImpact(point, { blocked: true, direction: attacker.facing });
-    sound.impact({ blocked: true });
+    if (typeof sound.parry === "function") sound.parry(clamp((target.x || 0) / 6, -0.7, 0.7));
+    else sound.impact({ blocked: true });
     updateHealthDisplay();
     hitStop = Math.max(hitStop, 0.06);
     return;
@@ -1009,9 +1147,13 @@ function resolveCombatImpact(attacker, target, attack, point) {
     target.landingTime = 0;
   }
   if (!attack.projectile) attacker.vx = targetAirborne ? 0 : -direction * 0.22;
-  hitStop = Math.max(hitStop, counter ? 0.1 : 0.06);
-  shake = Math.max(shake, !blocked && attack.knockdown ? 0.38 : 0.22);
-  if (!blocked && (attack.launch || attack.knockdown || attack.kind === "heavy")) {
+  const isHeavyHit = attack.kind === "heavy" || attack.kind === "combo-finisher" || launches ||
+    (!blocked && attack.knockdown) || attack.limb === "rightPunch" || attack.limb === "rightKick";
+  const stopSeconds = attack.special && !blocked ? 0.130 : (counter || isHeavyHit) && !blocked ? 0.095 : 0.055;
+  hitStop = Math.max(hitStop, stopSeconds);
+  const dmgShake = clamp((damage / 28) * 0.42, 0.08, 0.46) * (blocked ? 0.45 : 1);
+  shake = Math.max(shake, dmgShake);
+  if (!blocked && (attack.launch || attack.knockdown || isHeavyHit || attack.special)) {
     cameraTilt = direction * (attack.launch ? 0.045 : 0.03);
   }
   if (typeof dynamicCamera !== "undefined") {
@@ -1019,40 +1161,74 @@ function resolveCombatImpact(attacker, target, attack, point) {
       launch: launches,
       counter,
       knockdown: !blocked && attack.knockdown,
-      heavy: attack.kind === "heavy" || attack.special,
+      heavy: isHeavyHit || attack.special,
+      special: Boolean(attack.special),
+      blocked,
+      damage,
       direction
     });
   }
   spawnCallout(blocked ? "BLOCCATO!" : counter ? "COUNTER HIT!" : attack.unblockable && attack.projectile ? "VETO!" : comicWords[Math.floor(Math.random() * comicWords.length)], target.x, target.y + 2.65, target.z);
-  spawnImpact(point, {
-    launch: launches,
-    special: !blocked && attack.special,
-    blocked,
-    direction
-  });
   updateHealthDisplay();
-  if (target.health <= 0) finishMatch(attacker);
-  else sound.impact({ blocked, launch: launches });
+  if (target.health <= 0) {
+    finishMatch(attacker, "knockout", point);
+  } else {
+    spawnImpact(point, {
+      launch: launches,
+      counter,
+      special: !blocked && attack.special,
+      blocked,
+      direction
+    });
+    sound.impact({
+      blocked,
+      launch: launches,
+      heavy: isHeavyHit,
+      counter,
+      special: Boolean(attack.special),
+      pan: clamp((target.x || 0) / 6, -0.7, 0.7)
+    });
+  }
 }
 
-function finishMatch(winner, reason = "knockout") {
+function finishMatch(winner, reason = "knockout", koPoint = null) {
   if (matchOver) return;
   matchOver = true;
   matchActive = false;
   clearInputs();
   updateTouchVisibility();
   sound.stopMatch();
+  const loser = winner === player ? opponent : player;
   if (reason === "knockout") {
     sound.knockout();
-    koSlowMo = 0.85;
+    koSlowMo = 1.2;
+    if (loser && !loser.airborne && loser.y === 0) {
+      loser.vx = winner.facing * 3.4;
+      loser.vy = 3.2;
+      loser.airborne = true;
+    }
+    const impactPos = koPoint || (loser ? new THREE.Vector3(loser.x, loser.y + 1.35, loser.z) : new THREE.Vector3());
+    if (typeof spawnImpact === "function") {
+      spawnImpact(impactPos, { ko: true, launch: true, special: true, direction: winner.facing || 1 });
+    }
     if (typeof dynamicCamera !== "undefined") dynamicCamera.triggerKO(winner.facing);
+  } else if (typeof showAnnouncer === "function") {
+    showAnnouncer("TIME UP!", tournament?.roundLabel || "DECISION", { duration: 1.5 });
   }
-  const loser = winner === player ? opponent : player;
   winner.attack = null;
   loser.attack = null;
   const outcome = tournament.recordRound(winner === player ? "player" : "cpu", winner.health);
   updateHealthDisplay();
-  victory = { winner, loser, time: 0, outcome, totalTime: performance.now() - tournamentStartedAt };
+  victory = {
+    winner,
+    loser,
+    time: 0,
+    outcome,
+    totalTime: performance.now() - tournamentStartedAt,
+    reason,
+    koSlammed: reason !== "knockout",
+    groundAt: reason !== "knockout" ? 0 : null
+  };
 }
 
 function showContinue() {
@@ -1675,13 +1851,23 @@ function updateImpactEffects(dt) {
   for (let i = impactEffects.length - 1; i >= 0; i -= 1) {
     const effect = impactEffects[i];
     effect.life -= dt;
-    const progress = 1 - Math.max(effect.life, 0) / effect.duration;
-    effect.mesh.material.opacity = 1 - progress;
+    const progress = clamp(1 - Math.max(effect.life, 0) / effect.duration, 0, 1);
+    const fade = 1 - progress;
+    if (effect.mesh.material) effect.mesh.material.opacity = fade;
     if (effect.kind === "spark") {
       effect.mesh.position.addScaledVector(effect.velocity, dt);
-      effect.velocity.y -= 7 * dt;
+      effect.velocity.multiplyScalar(Math.exp(-9 * dt));
+      effect.velocity.y -= 6.5 * dt;
+      if (effect.baseScale) {
+        const pulse = (0.55 + fade * 0.65) * (1 + Math.sin(progress * Math.PI * 3) * 0.16);
+        effect.mesh.scale.copy(effect.baseScale).multiplyScalar(pulse);
+      }
+    } else if (effect.kind === "flare") {
+      const flareScale = (effect.baseSize || 2.1) * (0.45 + Math.sin(Math.min(progress * 1.4, 1) * Math.PI) * 0.95);
+      effect.mesh.scale.set(flareScale, flareScale, 1);
     } else {
-      effect.mesh.scale.setScalar(0.2 + progress * 1.25);
+      const maxScale = effect.maxScale || 2.2;
+      effect.mesh.scale.setScalar(0.22 + (1 - Math.pow(1 - progress, 2)) * maxScale);
       effect.mesh.quaternion.copy(camera.quaternion);
     }
     if (effect.life <= 0) {
@@ -1728,7 +1914,18 @@ function updateVictory(dt) {
 
   loser.vy -= 13.5 * dt;
   loser.y = Math.max(0, loser.y + loser.vy * dt);
-  if (loser.y === 0) loser.vy = 0;
+  if (loser.y === 0) {
+    loser.vy = 0;
+    loser.airborne = false;
+    if (!victory.koSlammed && victory.reason === "knockout") {
+      victory.koSlammed = true;
+      victory.groundAt = victory.time;
+      koSlowMo = 0;
+      shake = Math.max(shake, 0.24);
+      spawnBurst(loser, "#e2c896", 10);
+      showAnnouncer("K.O. — MOZIONE APPROVATA!", "FINITO IL DIBATTITO", { ko: true, duration: 1.65 });
+    }
+  }
   loser.x = clamp(loser.x + loser.vx * dt, -6.1, 6.1);
   loser.vx *= Math.exp(-5 * dt);
   loser.root.position.set(loser.x, loser.y, loser.z);
@@ -1750,7 +1947,8 @@ function updateVictory(dt) {
     joint.rotation.x = THREE.MathUtils.lerp(joint.rotation.x, 0, settle);
     joint.rotation.z = THREE.MathUtils.lerp(joint.rotation.z, 0, settle);
   }
-  if (victory.time >= 1.8 && !victory.champion) finishRoundTransition(victory.outcome);
+  const groundAge = victory.groundAt !== null && victory.groundAt !== undefined ? victory.time - victory.groundAt : victory.time;
+  if (victory.time >= 1.8 && victory.koSlammed && groundAge >= 1.25 && !victory.champion) finishRoundTransition(victory.outcome);
 }
 
 function update(dt) {
@@ -1811,7 +2009,7 @@ function animate() {
   let simDt = Math.min(simFrame, 0.04);
   if (typeof koSlowMo !== "undefined" && koSlowMo > 0) {
     koSlowMo = Math.max(0, koSlowMo - elapsedFrame);
-    simDt *= 0.28;
+    simDt *= 0.25;
   }
   update(simDt);
   const visualDt = Math.min(elapsedFrame, 0.1);
@@ -1946,7 +2144,7 @@ window.addEventListener("keydown", (event) => {
     }
     return;
   }
-  if (event.target === musicToggle || event.target === touchToggle) return;
+  if (event.target === musicToggle || event.target === sfxToggle || event.target === touchToggle) return;
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) ||
       (event.key === " " && event.target !== document.querySelector("#quit-button") &&
         event.target !== document.querySelector("#change-fighter-button"))) event.preventDefault();
@@ -2042,21 +2240,40 @@ document.querySelector("#pause-quit-button").addEventListener("click", returnToT
 if (!sound.available) {
   musicToggle.disabled = true;
   musicToggle.title = "Web Audio is not available in this browser.";
+  if (sfxToggle) {
+    sfxToggle.disabled = true;
+    sfxToggle.title = "Web Audio is not available in this browser.";
+  }
 }
 function unlockAudio() {
   if (!sound.unlock()) {
     musicToggle.disabled = true;
     musicToggle.title = "Web Audio could not be initialized.";
+    if (sfxToggle) {
+      sfxToggle.disabled = true;
+      sfxToggle.title = "Web Audio could not be initialized.";
+    }
   }
 }
 window.addEventListener("pointerdown", unlockAudio, true);
+window.addEventListener("touchstart", unlockAudio, true);
 window.addEventListener("keydown", unlockAudio, true);
 musicToggle.addEventListener("click", () => {
+  sound.unlock();
   const enabled = musicToggle.getAttribute("aria-pressed") !== "true";
   musicToggle.setAttribute("aria-pressed", String(enabled));
   musicToggle.textContent = `Music: ${enabled ? "On" : "Off"}`;
   sound.setMusicEnabled(enabled);
 });
+if (sfxToggle) {
+  sfxToggle.addEventListener("click", () => {
+    sound.unlock();
+    const enabled = sfxToggle.getAttribute("aria-pressed") !== "true";
+    sfxToggle.setAttribute("aria-pressed", String(enabled));
+    sfxToggle.textContent = `SFX: ${enabled ? "On" : "Off"}`;
+    sound.setSfxEnabled(enabled);
+  });
+}
 
 buildRoster();
 updateTouchVisibility();

@@ -92,9 +92,34 @@ test("dynamic Tekken camera tracks midpoint, zooms on combos, and triggers tilt/
   assert.ok(dyn.getState().zoomPunch >= 1.8);
   assert.ok(dyn.getState().tilt < -0.05);
 
-  // K.O. slow-motion finish framing
+  // Damage-proportional micro camera shake
+  const camLow = new THREE.PerspectiveCamera(42, 16 / 9, 0.1, 80);
+  const dynLow = createDynamicCamera(camLow);
+  dynLow.triggerImpact({ damage: 6, direction: 1 });
+  const lowShake = dynLow.getState().shake;
+  const camHigh = new THREE.PerspectiveCamera(42, 16 / 9, 0.1, 80);
+  const dynHigh = createDynamicCamera(camHigh);
+  dynHigh.triggerImpact({ damage: 28, direction: 1 });
+  assert.ok(dynHigh.getState().shake > lowShake * 2, "shake should scale proportionally with move damage");
+
+  // K.O. slow-motion finish framing -> loser lands -> low-angle victory sweep
   dyn.triggerKO(1);
   assert.ok(dyn.getState().zoomPunch >= 2.3);
-  dyn.update(0.03, { player: p1Combo, opponent: p2Combo, victory: { winner: p1Combo, loser: p2Combo, time: 0.1 }, koSlowMo: 0.7 });
+  dyn.update(0.03, {
+    player: p1Combo,
+    opponent: p2Combo,
+    victory: { winner: p1Combo, loser: p2Combo, time: 0.2, reason: "knockout", koSlammed: false, groundAt: null },
+    koSlowMo: 0.9
+  });
+  const slowMoY = cam.position.y;
+  for (let i = 0; i < 40; i += 1) {
+    dyn.update(0.03, {
+      player: p1Combo,
+      opponent: p2Combo,
+      victory: { winner: p1Combo, loser: p2Combo, time: 0.6 + i * 0.03, reason: "knockout", koSlammed: true, groundAt: 0.5 },
+      koSlowMo: 0
+    });
+  }
+  assert.ok(cam.position.y < slowMoY, "post-KO victory camera should sweep to a low-angle close-up of the winner");
   assert.ok(Number.isFinite(cam.position.x) && Number.isFinite(cam.position.y) && Number.isFinite(cam.position.z));
 });

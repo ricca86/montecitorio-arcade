@@ -41,7 +41,7 @@ function setup() {
     player, opponent, matchActive: true, isPaused: false, hitStop: 0, shake: 0, cameraTilt: 0,
     keys, inputState, keyboardActions, lastTap: { up: 0, down: 0 }, performance,
     document: { querySelector: (selector) => badges[selector] },
-    sound: { swing() {}, impact() {}, emptyClick() {}, specialWindup() {} }, announceSpecial() {}, spawnBurst() {},
+    sound: { swing() {}, impact() {}, parry() {}, emptyClick() {}, specialWindup() {} }, announceSpecial() {}, spawnBurst() {},
     spawnBallot() {}, spawnCallout() {}, spawnImpact() {}, updateHealthDisplay() {}, finishMatch() {},
     contactPoint: () => new THREE.Vector3(),
     clamp: THREE.MathUtils.clamp, poseFighter() {}, spawnSidestepGhost() {},
@@ -289,7 +289,7 @@ test("counter-hits amplify startup damage and launch knockdowns, but not blocks 
   context.tryHit(player, opponent);
   assert.equal(opponent.health, 73);
   assert.equal(opponent.vy, 5.1);
-  assert.equal(context.hitStop, 0.1);
+  assert.equal(context.hitStop, 0.095);
   const block = setup();
   block.opponent.guardMode = "standing";
   block.opponent.attack = { age: 0.05, windup: 0.2, hit: false };
@@ -297,7 +297,7 @@ test("counter-hits amplify startup damage and launch knockdowns, but not blocks 
   block.context.tryHit(block.player, block.opponent);
   assert.equal(block.opponent.health, 97);
   assert.equal(block.opponent.airborne, false);
-  assert.equal(block.context.hitStop, 0.06);
+  assert.equal(block.context.hitStop, 0.055);
   const recovery = setup();
   recovery.opponent.attack = { age: 0.2, windup: 0.2, hit: true };
   recovery.player.attack = { height: "mid", damage: 20, range: 2, age: 0.1, windup: 0.08, hit: false };

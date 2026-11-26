@@ -344,29 +344,39 @@ export function createDynamicCamera(camera) {
   let zoomPunch = 0;
   let exchangeHold = 0;
 
-  function triggerImpact({ launch = false, counter = false, knockdown = false, heavy = false, direction = 1 } = {}) {
+  function triggerImpact({
+    launch = false,
+    counter = false,
+    knockdown = false,
+    heavy = false,
+    special = false,
+    blocked = false,
+    damage = 8,
+    direction = 1
+  } = {}) {
     exchangeHold = Math.max(exchangeHold, 0.72);
-    if (knockdown || counter || launch) {
-      shake = Math.max(shake, knockdown ? 0.40 : counter ? 0.34 : 0.26);
+    const dmgShake = clamp((damage / 28) * 0.42, 0.06, 0.46) * (blocked ? 0.45 : 1);
+    if (!blocked && (knockdown || counter || launch || special)) {
+      shake = Math.max(shake, dmgShake, knockdown ? 0.40 : counter ? 0.34 : 0.28);
     } else {
-      shake = Math.max(shake, heavy ? 0.25 : 0.16);
+      shake = Math.max(shake, dmgShake, !blocked && heavy ? 0.24 : 0.10);
     }
-    if (launch || counter || knockdown || heavy) {
-      const tiltMag = counter ? 0.064 : launch ? 0.054 : 0.032;
+    if (!blocked && (launch || counter || knockdown || heavy || special)) {
+      const tiltMag = counter ? 0.064 : launch ? 0.054 : special ? 0.048 : 0.032;
       tilt = direction * tiltMag;
     }
-    if (launch || counter) {
-      zoomPunch = Math.max(zoomPunch, counter ? 1.9 : 1.5);
-    } else if (knockdown) {
+    if (!blocked && (launch || counter || special)) {
+      zoomPunch = Math.max(zoomPunch, counter ? 1.9 : special ? 1.75 : 1.5);
+    } else if (!blocked && knockdown) {
       zoomPunch = Math.max(zoomPunch, 1.15);
     }
   }
 
   function triggerKO(direction = 1) {
-    shake = Math.max(shake, 0.44);
-    tilt = direction * 0.078;
-    zoomPunch = 2.45;
-    exchangeHold = 1.2;
+    shake = Math.max(shake, 0.52);
+    tilt = direction * 0.085;
+    zoomPunch = 2.65;
+    exchangeHold = 1.4;
   }
 
   function update(dt, { player, opponent, victory, koSlowMo = 0 } = {}) {
@@ -378,21 +388,32 @@ export function createDynamicCamera(camera) {
     if (victory) {
       const winner = victory.winner;
       const loser = victory.loser;
-      if (koSlowMo > 0) {
-        // Dramatic K.O. slow-motion framing midpoint biased toward the downed opponent
+      const fallingSlowMo = koSlowMo > 0 || (victory.reason === "knockout" && !victory.koSlammed);
+      if (fallingSlowMo) {
+        // Dramatic K.O. slow-motion zoom toward the falling loser
         focus.set(
-          THREE.MathUtils.lerp(winner.x, loser.x, 0.55),
-          1.25 + loser.y * 0.45,
-          THREE.MathUtils.lerp(winner.z, loser.z, 0.55)
+          THREE.MathUtils.lerp(winner.x, loser.x, 0.72),
+          1.05 + loser.y * 0.55,
+          THREE.MathUtils.lerp(winner.z, loser.z, 0.72)
         );
-        distance = 6.5 - zoomPunch * 0.55;
-        desired = new THREE.Vector3(focus.x + winner.facing * 0.48, focus.y + 1.02, focus.z + distance);
+        distance = clamp(6.0 - zoomPunch * 0.45, 4.4, 7.2);
+        desired = new THREE.Vector3(focus.x + winner.facing * 0.65, focus.y + 0.95, focus.z + distance);
       } else {
-        const maxOffset = Math.min(0.8, camera.aspect * 0.5);
-        const offset = clamp((loser.x - winner.x) * 0.5, -maxOffset, maxOffset);
-        focus.set(winner.x + offset, winner.y + 1.55 * winner.definition.height, winner.z);
-        distance = Math.max(4.5, 1.3 / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
-        desired = new THREE.Vector3(focus.x + 0.2, winner.y + 0.95, winner.z + distance);
+        // Dramatic low-angle close-up orbit of the winner performing their victory pose
+        const orbitTime = victory.groundAt !== null && victory.groundAt !== undefined
+          ? Math.max(0, victory.time - victory.groundAt)
+          : victory.time;
+        const maxOffset = Math.min(0.6, camera.aspect * 0.4);
+        const offset = clamp((loser.x - winner.x) * 0.25, -maxOffset, maxOffset);
+        const wHeight = winner.definition?.height || 1;
+        focus.set(winner.x + offset, winner.y + 1.48 * wHeight, winner.z);
+        distance = Math.max(3.9, 1.15 / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
+        const orbitAngle = winner.facing * 0.36 - winner.facing * Math.min(orbitTime * 0.72, 0.95);
+        desired = new THREE.Vector3(
+          winner.x + Math.sin(orbitAngle) * distance,
+          winner.y + 0.72,
+          winner.z + Math.cos(orbitAngle) * distance
+        );
       }
     } else if (player && opponent) {
       focus.set(
