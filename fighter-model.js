@@ -2005,7 +2005,28 @@ export function applyKickAnimation(joints, { style = "roundhouse", side = "left"
  * with sculpted musculature, tailored suit geometry, 128x128 NearestFilter textures,
  * and Gouraud vertex colors.
  */
-export function buildFighterModel(definition, facing) {
+function alternateMirrorPalette(definition) {
+  const suit = new THREE.Color(definition.suit);
+  const hsl = { h: 0, s: 0, l: 0 };
+  suit.getHSL(hsl);
+  // Shift P2 mirror suit noticeably darker & cooler/warmer so both candidates are distinct
+  const newHue = (hsl.h + (hsl.h > 0.5 && hsl.h < 0.72 ? -0.18 : 0.14) + 1) % 1;
+  const newSat = Math.min(1, hsl.s + 0.08);
+  const newLight = hsl.l > 0.45 ? hsl.l * 0.58 : Math.max(0.08, hsl.l * 0.72);
+  suit.setHSL(newHue, newSat, newLight);
+
+  const tie = new THREE.Color(definition.tie);
+  tie.offsetHSL(0.38, 0.1, -0.06);
+
+  return {
+    ...definition,
+    suit: `#${suit.getHexString()}`,
+    tie: `#${tie.getHexString()}`
+  };
+}
+
+export function buildFighterModel(rawDefinition, facing, { altSuit = false } = {}) {
+  const definition = altSuit ? alternateMirrorPalette(rawDefinition) : rawDefinition;
   const root = new THREE.Group();
   root.scale.x = facing;
   const model = new THREE.Group();

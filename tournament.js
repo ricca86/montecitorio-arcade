@@ -44,6 +44,35 @@ export class TournamentManager {
   }
 }
 
+export class VersusManager {
+  constructor(playerId, opponentId) {
+    if (!opponentOrder.includes(playerId)) throw new Error(`Unknown fighter: ${playerId}`);
+    if (!opponentOrder.includes(opponentId)) throw new Error(`Unknown fighter: ${opponentId}`);
+    this.playerId = playerId;
+    this.opponentId = opponentId;
+    this.currentStage = 0;
+    this.roundWins = { player: 0, cpu: 0 };
+    this.totalScore = 0;
+    this.winStreak = 0;
+  }
+
+  get roundLabel() {
+    const round = this.roundWins.player + this.roundWins.cpu + 1;
+    return round === 3 ? "FINAL ROUND" : `ROUND ${round}`;
+  }
+
+  recordRound(winner) {
+    if (winner !== "player" && winner !== "cpu") throw new Error(`Invalid round winner: ${winner}`);
+    this.roundWins[winner] += 1;
+    if (this.roundWins[winner] < 2) return "round";
+    return winner === "player" ? "versus-p1" : "versus-p2";
+  }
+
+  retry() {
+    this.roundWins = { player: 0, cpu: 0 };
+  }
+}
+
 export function difficultyForStage(stage) {
   if (!Number.isInteger(stage) || stage < 0 || stage > 7) throw new RangeError(`Invalid stage: ${stage}`);
   if (stage < 2) return { stage, reaction: 0.16, block: 0.08, sidestep: 0.03, speed: 0.7, combo: 1, launcher: 0, special: 0, damage: 1, health: 100 };

@@ -244,6 +244,26 @@ h1 span { color: #f3c7a8; }
   box-shadow: inset 0 0 0 2px #271c25, 0 12px 0 #1a111a, 0 24px 80px #000c;
 }
 .select-topline { justify-content: space-between; }
+.mode-switcher { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0 6px; }
+.mode-tab {
+  padding: 7px 10px;
+  border: 2px ridge #7c8499;
+  color: #bfb6c8;
+  background: linear-gradient(#262436, #14121d);
+  font: italic 900 12px Impact, "Arial Black", sans-serif;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  transform: skewX(-12deg);
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s, box-shadow .15s;
+}
+.mode-tab.active {
+  border-color: #ffe36b;
+  color: #fff6c9;
+  background: linear-gradient(110deg, #a7251f, #d95922 55%, #5f1822);
+  box-shadow: 0 0 14px rgba(255, 130, 48, .55);
+}
+.mode-tab:focus-visible { outline: 2px solid #fff0ab; outline-offset: 2px; }
 .select-count { color: #c0b5c5; font-size: 9px; }
 .select-panel h2, .result-card h2 { margin: 5px 0 4px; font: italic 900 clamp(30px, 4vw, 46px) Impact, "Arial Black", sans-serif; letter-spacing: .03em; text-transform: uppercase; text-shadow: 2px 3px #781f24, 0 0 16px #f3412b66; }
 .select-panel h2 em { color: #ffcf4c; font-style: italic; }
@@ -308,7 +328,14 @@ h1 span { color: #f3c7a8; }
   box-shadow: inset 0 0 0 2px #8ed0ff, 0 0 14px #3c8bffb0;
   animation: cpu-frame-flash .72s steps(2, end) infinite;
 }
+.fighter-card.selected.cpu-selected {
+  box-shadow: inset 0 0 0 2px #ffeda6, 0 0 14px #ff5a36, 0 0 18px #3c9bff;
+}
 .fighter-card.cpu-selected .cursor-cpu { opacity: 1; }
+.fighter-card.locked-p1 .cursor-p1 { background: linear-gradient(#ffd447, #d63218); color: #1d0c0c; box-shadow: 0 0 10px #ffd447; }
+.fighter-card.locked-p2 .cursor-cpu { background: linear-gradient(#66f2ff, #1e5ed8); color: #07192d; box-shadow: 0 0 10px #66f2ff; }
+.fighter-card.locked-p1 { animation: none; border-color: #ffe86b; }
+.fighter-card.locked-p2:not(.selected) { animation: none; border-color: #6df2ff; }
 @keyframes p1-frame-flash { 50% { border-color: #ff4048; box-shadow: inset 0 0 0 2px #ff8a6b, 0 0 18px #ff2b2bdd; } }
 @keyframes cpu-frame-flash { 50% { border-color: #d0ebff; box-shadow: inset 0 0 0 2px #4aa4ff, 0 0 16px #4096ffdd; } }
 .fighter-card:hover:not(.selected) { border-color: #ffe36b; transform: skewX(-14deg) translateY(-2px); }
@@ -381,10 +408,14 @@ h1 span { color: #f3c7a8; }
 .select-hint { margin: 12px 0 0; color: #897f90; font-size: 8px; text-align: center; }
 .hidden { display: none !important; }
 .result-screen { place-items: end start; background: linear-gradient(0deg, rgba(20, 12, 24, .45), transparent 50%); pointer-events: none; }
-.result-card { width: min(300px, 100%); padding: 18px; border: 2px ridge #d8dce2; border-radius: 0; text-align: center; background: var(--panel); backdrop-filter: blur(10px); pointer-events: auto; }
+.result-screen.versus-result { place-items: center; background: radial-gradient(circle, rgba(90, 22, 32, .56), rgba(10, 10, 22, .82)); }
+.result-card { width: min(360px, 100%); padding: 18px; border: 3px ridge #e4d4a6; border-radius: 0; text-align: center; background: var(--panel); backdrop-filter: blur(10px); pointer-events: auto; }
 .result-card h2 { color: var(--gold); }
-.result-card p { margin: 8px 0 20px; color: #c8bdce; }
-.champion-subtitle { color: #ffe48c; font: italic 900 19px Impact, sans-serif; text-shadow: 1px 2px #882a1d; }
+.result-card p { margin: 8px 0 16px; color: #c8bdce; }
+.result-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.versus-panel { width: min(720px, 100%); background: linear-gradient(140deg, #151726, #3c1722 65%, #15131d); }
+.versus-mirror-note { color: #ffdf8c; font: 700 10px "DM Mono", monospace; letter-spacing: .1em; margin: 10px 0 0; }
+.champion-subtitle { display: block; margin-top: 2px; color: #ffe48c; font: italic 900 18px Impact, sans-serif; text-shadow: 1px 2px #882a1d; }
 .signature-toast { position: absolute; z-index: 3; right: 20px; bottom: 17px; padding: 8px 12px; border: 1px solid rgba(255,255,255,.25); border-radius: 5px; color: #fff3d4; background: rgba(26,19,32,.8); font: 500 9px "DM Mono", monospace; letter-spacing: .08em; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .signature-toast.show { opacity: 1; }
 .controller-toast { position: absolute; z-index: 8; top: 10px; left: 50%; max-width: 90%; padding: 8px 14px; border: 2px ridge #e2c47e; color: #fff0b0; background: linear-gradient(#763126, #241822); font: italic 900 14px Impact, sans-serif; text-align: center; transform: translateX(-50%) skewX(-5deg); pointer-events: none; }

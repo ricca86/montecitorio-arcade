@@ -1,10 +1,10 @@
 import * as THREE from "./vendor/three/three.module.min.js";
 import { fighters } from "./fighters.js";
 import { sound } from "./sound-engine.js";
-import { TournamentManager, difficultyForStage, formatTournamentTime } from "./tournament.js";
+import { TournamentManager, VersusManager, difficultyForStage, formatTournamentTime } from "./tournament.js";
 import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
 import { attackHeight, defenseOutcome, isCounterHit } from "./defense.js";
-import { InputState, keyboardActions, gamepadActions } from "./input.js";
+import { InputState, InputManager, keyboardActions, p2KeyboardActions, gamepadActions } from "./input.js";
 import { buildFighterModel, updateGroundedRig, applyKickAnimation, isKickHitboxActive, setSpecialReadyGlow, createFaceTexture } from "./fighter-model.js";
 import { createArena } from "./arena.js";
 import { createAtmosphereRig, createDynamicCamera } from "./atmosphere.js";
@@ -27,7 +27,12 @@ const rosterNode = document.querySelector("#roster");
 const selectScreen = document.querySelector("#select-screen");
 const resultScreen = document.querySelector("#result-screen");
 const ladderScreen = document.querySelector("#ladder-screen");
+const versusScreen = document.querySelector("#versus-screen");
 const continueScreen = document.querySelector("#continue-screen");
+const modeArcadeButton = document.querySelector("#mode-arcade");
+const modeVersusButton = document.querySelector("#mode-versus");
+const versusChangeButton = document.querySelector("#versus-change-button");
+const versusMenuButton = document.querySelector("#versus-menu-button");
 const pauseScreen = document.querySelector("#pause-screen");
 const pauseButton = document.querySelector("#pause-button");
 const stageElement = document.querySelector(".stage");
@@ -86,8 +91,11 @@ const cameraTarget = dynamicCamera.targetPos;
 
 const clock = new THREE.Clock();
 const fightersById = new Map(fighters.map((fighter) => [fighter.id, fighter]));
-const inputState = new InputState();
+const inputManager = new InputManager();
+const inputState = inputManager.p1Input;
+const p2InputState = inputManager.p2Input;
 const lastTap = { up: 0, down: 0 };
+const p2LastTap = { up: 0, down: 0 };
 const touchPointers = new Map();
 const gamepadPrevious = new Map();
 let touchEnabled = "ontouchstart" in window || navigator.maxTouchPoints > 0;
@@ -132,11 +140,16 @@ function createLensFlareTexture() {
 const lensFlareTexture = createLensFlareTexture();
 
 let selectedId = null;
+let p2SelectedId = fighters[1].id;
+let gameMode = "arcade";
+let p1Locked = false;
+let p2Locked = false;
 let player = null;
 let opponent = null;
 let tournament = null;
 let tournamentStartedAt = 0;
 let ladderTimeout = null;
+let versusTimeout = null;
 let continueInterval = null;
 let continueDeadline = 0;
 let matchActive = false;
@@ -172,8 +185,8 @@ resize();
 const arena = createArena(scene);
 atmosphere.bindArena(arena);
 
-function createCombatant(definition, x, z, facing, isPlayer) {
-  const body = buildFighterModel(definition, facing);
+function createCombatant(definition, x, z, facing, isPlayer, options = {}) {
+  const body = buildFighterModel(definition, facing, options);
   scene.add(body.root);
   body.root.position.set(x, 0, z);
   return {
@@ -225,6 +238,85 @@ function statRowMarkup(label, value) {
   return `<div class="stat-bar-row"><span>${label}</span><span class="stat-track"><i style="width:${pct}%"></i></span></div>`;
 }
 
+function updateSelectDisplay() {
+  const p1Index = Math.max(0, fighters.findIndex((entry) => entry.id === selectedId));
+  const p2Index = gameMode === "versus"
+    ? Math.max(0, fighters.findIndex((entry) => entry.id === p2SelectedId))
+    : (p1Index + 1) % fighters.length;
+
+  [...rosterNode.children].forEach((card, index) => {
+    const isP1 = index === p1Index;
+    const isP2 = index === p2Index;
+    card.classList.toggle("selected", isP1);
+    card.classList.toggle("cpu-selected", isP2);
+    card.classList.toggle("locked-p1", gameMode === "versus" && isP1 && p1Locked);
+    card.classList.toggle("locked-p2", gameMode === "versus" && isP2 && p2Locked);
+    card.setAttribute("aria-selected", String(isP1));
+    const p1Tag = card.querySelector(".cursor-p1");
+    const p2Tag = card.querySelector(".cursor-cpu");
+    if (p1Tag) p1Tag.textContent = gameMode === "versus" && p1Locked ? "1P OK" : "1P";
+    if (p2Tag) p2Tag.textContent = gameMode === "versus" ? (p2Locked ? "2P OK" : "2P") : "CPU";
+  });
+
+  const p1Fighter = fighters[p1Index];
+  const p2Fighter = fighters[p2Index];
+  const countNode = document.querySelector(".select-count");
+  if (countNode) {
+    countNode.textContent = gameMode === "versus"
+      ? `1P 0${p1Index + 1} · 2P 0${p2Index + 1}`
+      : `0${p1Index + 1} / 08`;
+  }
+  const detailLabel = document.querySelector(".detail-label");
+  if (gameMode === "versus") {
+    if (detailLabel) detailLabel.textContent = "LOCAL 2P MATCHUP";
+    document.querySelector("#detail-name").textContent = `${p1Fighter.name} vs ${p2Fighter.name}`;
+    document.querySelector("#detail-move").textContent =
+      `1P: ${p1Locked ? "READY!" : "A/D + U/Space"} · 2P: ${p2Locked ? "READY!" : "Arrows + Numpad 1/Enter"}`;
+  } else {
+    if (detailLabel) detailLabel.textContent = "YOUR CANDIDATE";
+    document.querySelector("#detail-name").textContent = p1Fighter.name;
+    document.querySelector("#detail-move").textContent = `Signature move: ${p1Fighter.special}`;
+  }
+  const detailStats = document.querySelector("#detail-stats");
+  if (detailStats) {
+    detailStats.innerHTML =
+      `${statRowMarkup("SPEED", p1Fighter.stats.speed)}${statRowMarkup("POWER", p1Fighter.stats.power)}${statRowMarkup("RHETORIC", p1Fighter.stats.range)}`;
+  }
+  startButton.disabled = false;
+  startButton.innerHTML = gameMode === "versus"
+    ? `Start 1P vs 2P <span aria-hidden="true">↗</span>`
+    : `Enter the chamber <span aria-hidden="true">↗</span>`;
+}
+
+function setGameMode(mode) {
+  gameMode = mode === "versus" ? "versus" : "arcade";
+  inputManager.setMode(gameMode);
+  p1Locked = false;
+  p2Locked = false;
+  if (modeArcadeButton) {
+    modeArcadeButton.classList.toggle("active", gameMode === "arcade");
+    modeArcadeButton.setAttribute("aria-selected", String(gameMode === "arcade"));
+  }
+  if (modeVersusButton) {
+    modeVersusButton.classList.toggle("active", gameMode === "versus");
+    modeVersusButton.setAttribute("aria-selected", String(gameMode === "versus"));
+  }
+  const intro = document.querySelector("#select-intro");
+  const hint = document.querySelector("#select-hint");
+  if (intro) {
+    intro.textContent = gameMode === "versus"
+      ? "2P LOCAL VERSUS · P1 (WASD + F/G/C/V/R/T) vs P2 (ARROWS + J/K/N/M/L/O or NUMPAD)"
+      : "ELEZIONI 2027 ARCADE LADDER · Seven rivals and a final boss await.";
+  }
+  if (hint) {
+    hint.textContent = gameMode === "versus"
+      ? "1P: A/D MOVE · F/U/SPACE LOCK   |   2P: ARROWS MOVE · J/NUMPAD 1/ENTER LOCK"
+      : "CLICK A PORTRAIT OR USE THE ARROW KEYS · ENTER TO CONFIRM";
+  }
+  if (!p2SelectedId) p2SelectedId = fighters[1].id;
+  updateSelectDisplay();
+}
+
 function buildRoster() {
   rosterNode.innerHTML = "";
   fighters.forEach((fighter, index) => {
@@ -238,38 +330,35 @@ function buildRoster() {
       `<span class="card-cursor cursor-p1">1P</span><span class="card-cursor cursor-cpu">CPU</span>` +
       `<div class="card-head"><span class="portrait" aria-hidden="true">${fighter.initials}</span><strong>${fighter.name}</strong></div>` +
       `<div class="card-stats">${statRowMarkup("SPEED", fighter.stats.speed)}${statRowMarkup("POWER", fighter.stats.power)}${statRowMarkup("RHETORIC", fighter.stats.range)}</div>`;
-    button.addEventListener("click", () => selectFighter(fighter.id, true));
+    button.addEventListener("click", () => {
+      if (gameMode === "versus" && p1Locked && !p2Locked) {
+        selectFighter(fighter.id, true, 2);
+      } else {
+        selectFighter(fighter.id, true, 1);
+      }
+    });
     rosterNode.appendChild(button);
     if (index === 0 && !selectedId) selectedId = fighter.id;
   });
-  selectFighter(selectedId, false);
+  selectFighter(selectedId, false, 1);
 }
 
-function selectFighter(id, focusCard = false) {
-  selectedId = id;
+function selectFighter(id, focusCard = false, slot = 1) {
   const fighter = fightersById.get(id);
   if (!fighter) return;
   if (focusCard) sound.select();
-  const selectedIndex = fighters.findIndex((entry) => entry.id === id);
-  const cpuIndex = (selectedIndex + 1) % fighters.length;
-  [...rosterNode.children].forEach((card, index) => {
-    const selected = index === selectedIndex;
-    const cpuTarget = index === cpuIndex;
-    card.classList.toggle("selected", selected);
-    card.classList.toggle("cpu-selected", cpuTarget);
-    card.setAttribute("aria-selected", String(selected));
-    if (selected && focusCard) card.focus();
-  });
-  const countNode = document.querySelector(".select-count");
-  if (countNode) countNode.textContent = `0${selectedIndex + 1} / 08`;
-  document.querySelector("#detail-name").textContent = fighter.name;
-  document.querySelector("#detail-move").textContent = `Signature move: ${fighter.special}`;
-  const detailStats = document.querySelector("#detail-stats");
-  if (detailStats) {
-    detailStats.innerHTML =
-      `${statRowMarkup("SPEED", fighter.stats.speed)}${statRowMarkup("POWER", fighter.stats.power)}${statRowMarkup("RHETORIC", fighter.stats.range)}`;
+  if (slot === 2) {
+    p2SelectedId = id;
+  } else {
+    selectedId = id;
+    if (gameMode === "arcade") {
+      const idx = fighters.findIndex((entry) => entry.id === id);
+      p2SelectedId = fighters[(idx + 1) % fighters.length].id;
+    }
   }
-  startButton.disabled = false;
+  updateSelectDisplay();
+  const idx = fighters.findIndex((entry) => entry.id === id);
+  if (focusCard && slot === 1 && rosterNode.children[idx]) rosterNode.children[idx].focus();
 }
 
 function showAnnouncer(headline = "ELEZIONI!", subline = tournament?.roundLabel || "ROUND 1", { ko = false, duration = 1.7 } = {}) {
@@ -298,9 +387,47 @@ function disposeFighter(combatant) {
   });
 }
 
+function showVersusScreen() {
+  matchActive = false;
+  victory = null;
+  clearTimeout(versusTimeout);
+  setStageMood(0);
+  document.querySelector("#hud").classList.remove("active");
+  ladderScreen.classList.add("hidden");
+  continueScreen.classList.add("hidden");
+  if (versusScreen) versusScreen.classList.remove("hidden");
+  const p1 = fightersById.get(tournament.playerId);
+  const p2 = fightersById.get(tournament.opponentId);
+  const p1Name = document.querySelector("#vs-player-name");
+  const p2Name = document.querySelector("#vs-opponent-name");
+  const note = document.querySelector("#vs-mirror-note");
+  if (p1Name) p1Name.textContent = `1P · ${p1.name}`;
+  if (p2Name) p2Name.textContent = `2P · ${p2.name}`;
+  if (note) {
+    note.textContent = p1.id === p2.id
+      ? "MIRROR MATCH · P2 IN ALTERNATE SUIT · BEST OF 3"
+      : "BEST OF 3 ROUNDS · FIRST TO 2 WINS";
+  }
+  const p1Canvas = document.querySelector("#vs-player-portrait");
+  const p2Canvas = document.querySelector("#vs-opponent-portrait");
+  if (p1Canvas) drawLadderPortrait(p1Canvas, p1);
+  if (p2Canvas) drawLadderPortrait(p2Canvas, p2);
+  sound.confirm();
+  versusTimeout = setTimeout(startRound, 2000);
+}
+
 function beginMatch() {
   if (!selectedId || matchActive) return;
-  tournament = new TournamentManager(selectedId);
+  clearTimeout(ladderTimeout);
+  clearTimeout(versusTimeout);
+  if (gameMode === "versus") {
+    p1Locked = true;
+    p2Locked = true;
+    updateSelectDisplay();
+    tournament = new VersusManager(selectedId, p2SelectedId || fighters[1].id);
+  } else {
+    tournament = new TournamentManager(selectedId);
+  }
   tournamentStartedAt = performance.now();
   selectScreen.classList.add("hidden");
   if (vsFlashNode) {
@@ -309,7 +436,8 @@ function beginMatch() {
     vsFlashNode.classList.add("active");
     setTimeout(() => vsFlashNode.classList.add("hidden"), 420);
   }
-  showLadder();
+  if (gameMode === "versus") showVersusScreen();
+  else showLadder();
 }
 
 function setStageMood(stage) {
@@ -474,7 +602,9 @@ function clearCombatEffects() {
 function startRound() {
   if (!tournament || matchActive) return;
   clearTimeout(ladderTimeout);
+  clearTimeout(versusTimeout);
   ladderTimeout = null;
+  versusTimeout = null;
   clearCombatEffects();
   clearInputs();
   arena.resetProps();
@@ -484,14 +614,18 @@ function startRound() {
     fightersInMatch.forEach(disposeFighter);
     fightersInMatch.length = 0;
   }
-  const difficulty = difficultyForStage(tournament.currentStage);
+  const isVersus = typeof gameMode !== "undefined" && gameMode === "versus";
+  const difficulty = isVersus
+    ? { stage: 0, reaction: 0, block: 0, sidestep: 0, speed: 1, combo: 1, launcher: 0, special: 0, damage: 1, health: 100 }
+    : difficultyForStage(tournament.currentStage);
+  const mirrorMatch = isVersus && tournament.playerId === tournament.opponentId;
   player = createCombatant(fightersById.get(tournament.playerId), -2.7, 0.25, 1, true);
-  opponent = createCombatant(fightersById.get(tournament.opponentId), 2.7, -0.15, -1, false);
+  opponent = createCombatant(fightersById.get(tournament.opponentId), 2.7, -0.15, -1, false, { altSuit: mirrorMatch });
   updateComboBadge(player);
   updateComboBadge(opponent);
   opponent.health = opponent.maxHealth = difficulty.health;
   opponent.difficulty = difficulty;
-  if (tournament.currentStage === 7) {
+  if (!isVersus && tournament.currentStage === 7) {
     const aura = new THREE.Mesh(
       new THREE.SphereGeometry(0.9, 8, 6),
       new THREE.MeshBasicMaterial({ color: "#ffd353", transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending })
@@ -517,14 +651,27 @@ function startRound() {
   }
   selectScreen.classList.add("hidden");
   ladderScreen.classList.add("hidden");
+  if (typeof versusScreen !== "undefined" && versusScreen) versusScreen.classList.add("hidden");
   continueScreen.classList.add("hidden");
   resultScreen.classList.add("hidden");
+  resultScreen.classList.remove("versus-result");
   document.querySelector("#hud").classList.add("active");
   document.querySelector("#player-name").textContent = player.definition.name;
-  document.querySelector("#opponent-name").textContent = `${opponent.definition.name}${tournament.currentStage === 7 ? " · BOSS" : ""}`;
-  const stagePreset = atmosphere.applyStage(tournament.currentStage + 1);
-  document.querySelector(".edition").innerHTML = `STAGE ${tournament.currentStage + 1}/8 <span>•</span> ${stagePreset.label}`;
-  toast.textContent = `SIGNATURE: ${player.definition.special.toUpperCase()}  ·  BUILD 100% & PRESS L`;
+  document.querySelector("#opponent-name").textContent =
+    `${opponent.definition.name}${!isVersus && tournament.currentStage === 7 ? " · BOSS" : ""}`;
+  const oppTag = document.querySelector("#opponent-tag");
+  const p1Label = document.querySelector("#player-health-label");
+  const oppLabel = document.querySelector("#opponent-health-label");
+  if (oppTag) oppTag.textContent = isVersus ? "2P" : "CPU";
+  if (p1Label) p1Label.textContent = isVersus ? "CONSENSO 1P" : "CONSENSO";
+  if (oppLabel) oppLabel.textContent = isVersus ? "CONSENSO 2P" : "APPROVAZIONE";
+  const stagePreset = atmosphere.applyStage(isVersus ? 1 : tournament.currentStage + 1);
+  document.querySelector(".edition").innerHTML = isVersus
+    ? `2P LOCAL VERSUS <span>•</span> BEST OF 3`
+    : `STAGE ${tournament.currentStage + 1}/8 <span>•</span> ${stagePreset.label}`;
+  toast.textContent = isVersus
+    ? `1P: [R] ${player.definition.special.toUpperCase()} · 2P: [L/NUM6] ${opponent.definition.special.toUpperCase()}`
+    : `SIGNATURE: ${player.definition.special.toUpperCase()}  ·  BUILD 100% & PRESS L`;
   updateHealthDisplay();
   showAnnouncer();
 }
@@ -548,27 +695,80 @@ function setPaused(paused) {
   pauseScreen.classList.toggle("hidden", !paused);
   pauseButton.setAttribute("aria-expanded", String(paused));
   if (paused) {
+    const isVersus = typeof gameMode !== "undefined" && gameMode === "versus" && opponent;
     drawLadderPortrait(document.querySelector("#pause-portrait"), player.definition);
-    document.querySelector("#pause-fighter-name").textContent = player.definition.name;
-    document.querySelector("#pause-signature").textContent = `Signature: ${player.definition.special}`;
+    document.querySelector("#pause-fighter-name").textContent = isVersus
+      ? `1P ${player.definition.name} vs 2P ${opponent.definition.name}`
+      : player.definition.name;
+    document.querySelector("#pause-signature").textContent = isVersus
+      ? `1P [R]: ${player.definition.special} · 2P [L/N6]: ${opponent.definition.special}`
+      : `Signature: ${player.definition.special}`;
+
+    const controlsTitle = document.querySelector("#controls-title");
+    const combosTitle = document.querySelector("#combos-title");
+    const controlsList = document.querySelector("#pause-controls-list");
+    const combosList = document.querySelector("#pause-combos-list");
+    if (controlsTitle && combosTitle && controlsList && combosList) {
+      if (isVersus) {
+        controlsTitle.textContent = "PLAYER 1 (LEFT SIDE)";
+        controlsList.innerHTML =
+          `<div><dt><kbd>A</kbd> / <kbd>D</kbd></dt><dd>Walk / Back Guard</dd></div>` +
+          `<div><dt><kbd>W</kbd> / <kbd>S</kbd></dt><dd>Sidestep (tap) / Crouch</dd></div>` +
+          `<div><dt><kbd>F</kbd> / <kbd>G</kbd></dt><dd>Left Punch / Right Punch</dd></div>` +
+          `<div><dt><kbd>C</kbd> / <kbd>V</kbd></dt><dd>Left Kick / Right Kick</dd></div>` +
+          `<div><dt><kbd>S+G</kbd> / <kbd>T</kbd></dt><dd>Launcher (Fwd+<kbd>F</kbd> Parry)</dd></div>` +
+          `<div><dt><kbd>R</kbd></dt><dd>Signature Special (100%)</dd></div>`;
+        combosTitle.textContent = "PLAYER 2 (RIGHT SIDE / NUMPAD)";
+        combosList.innerHTML =
+          `<div><dt><kbd>←</kbd> / <kbd>→</kbd></dt><dd>Walk / Back Guard</dd></div>` +
+          `<div><dt><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>Sidestep (tap) / Crouch</dd></div>` +
+          `<div><dt><kbd>J</kbd>/<kbd>N4</kbd> · <kbd>K</kbd>/<kbd>N5</kbd></dt><dd>Left Punch / Right Punch</dd></div>` +
+          `<div><dt><kbd>N</kbd>/<kbd>N1</kbd> · <kbd>M</kbd>/<kbd>N2</kbd></dt><dd>Left Kick / Right Kick</dd></div>` +
+          `<div><dt><kbd>↓+K</kbd> / <kbd>O</kbd></dt><dd>Launcher (Fwd+<kbd>J</kbd> Parry)</dd></div>` +
+          `<div><dt><kbd>L</kbd> / <kbd>N6</kbd></dt><dd>Signature Special (100%)</dd></div>`;
+      } else {
+        controlsTitle.textContent = "UNIVERSAL CONTROLS";
+        controlsList.innerHTML =
+          `<div><dt><kbd>A</kbd> / <kbd>D</kbd></dt><dd>Walk</dd></div>` +
+          `<div><dt><kbd>W</kbd><kbd>W</kbd> / <kbd>S</kbd><kbd>S</kbd></dt><dd>3D sidestep</dd></div>` +
+          `<div><dt>Hold back</dt><dd>Standing guard</dd></div>` +
+          `<div><dt><kbd>S</kbd> + back</dt><dd>Crouch guard</dd></div>` +
+          `<div><dt>Forward + <kbd>U</kbd></dt><dd>Timed parry</dd></div>` +
+          `<div><dt><kbd>S+I</kbd></dt><dd>Launcher</dd></div>`;
+        combosTitle.textContent = "COMBO STRINGS";
+        combosList.innerHTML =
+          `<div><dt><kbd>U</kbd> → <kbd>U</kbd> → <kbd>I</kbd></dt><dd>1-2-Straight Knockdown</dd></div>` +
+          `<div><dt><kbd>U</kbd> → <kbd>I</kbd> → <kbd>K</kbd></dt><dd>Parliamentary Roundhouse</dd></div>` +
+          `<div><dt><kbd>J</kbd> → <kbd>K</kbd> → <kbd>K</kbd></dt><dd>Double Kick Filibuster</dd></div>` +
+          `<div><dt><kbd>U</kbd> → <kbd>U</kbd> → <kbd>S+I</kbd></dt><dd>Jab-to-Launcher Juggle Starter</dd></div>` +
+          `<div><dt><kbd>I</kbd> → <kbd>I</kbd> → <kbd>L</kbd></dt><dd>Signature Special Finisher</dd></div>`;
+      }
+    }
     document.querySelector("#resume-button").focus();
   } else if (matchActive) pauseButton.focus();
 }
 
 function restartMatch() {
-  if (!isPaused || !tournament || !matchCheckpoint) return;
+  const isVersus = typeof gameMode !== "undefined" && gameMode === "versus";
+  if (!isPaused || !tournament || (!matchCheckpoint && !isVersus)) return;
   tournament.roundWins = { player: 0, cpu: 0 };
-  tournament.totalScore = matchCheckpoint.totalScore;
-  tournament.winStreak = matchCheckpoint.winStreak;
+  if (matchCheckpoint) {
+    tournament.totalScore = matchCheckpoint.totalScore;
+    tournament.winStreak = matchCheckpoint.winStreak;
+  }
   matchActive = false;
   setPaused(false);
   startRound();
   pauseButton.focus();
 }
 
-function returnToTitleScreen() {
+function returnToTitleScreen(targetMode = null) {
   clearTimeout(ladderTimeout);
   ladderTimeout = null;
+  if (typeof versusTimeout !== "undefined") {
+    clearTimeout(versusTimeout);
+    versusTimeout = null;
+  }
   clearInterval(continueInterval);
   continueInterval = null;
   continueDeadline = 0;
@@ -588,7 +788,9 @@ function returnToTitleScreen() {
   tournamentStartedAt = 0;
   matchCheckpoint = null;
   resultScreen.classList.add("hidden");
+  resultScreen.classList.remove("versus-result");
   ladderScreen.classList.add("hidden");
+  if (typeof versusScreen !== "undefined" && versusScreen) versusScreen.classList.add("hidden");
   continueScreen.classList.add("hidden");
   selectScreen.classList.remove("hidden");
   document.querySelector("#hud").classList.remove("active");
@@ -600,6 +802,10 @@ function returnToTitleScreen() {
   document.querySelector("#player-combo").classList.add("hidden");
   document.querySelector("#cpu-combo").classList.add("hidden");
   tournament = null;
+  if (typeof p1Locked !== "undefined") p1Locked = false;
+  if (typeof p2Locked !== "undefined") p2Locked = false;
+  if (typeof targetMode === "string" && typeof setGameMode === "function") setGameMode(targetMode);
+  else if (typeof updateSelectDisplay === "function") updateSelectDisplay();
   if (typeof atmosphere !== "undefined") {
     atmosphere.applyStage(1);
     document.querySelector(".edition").innerHTML = `LIVE FROM THE CHAMBER <span>•</span> ROUND 1`;
@@ -948,24 +1154,28 @@ function useSpecial(combatant) {
   return true;
 }
 
-function playerAttack(key, parryShortcut = false) {
-  if (!player || !matchActive || player.stun > 0 || player.airborne || player.landingTime > 0) return;
-  const forward = player.facing === 1 ? "right" : "left";
-  if (key === "u" && (parryShortcut || inputState.has(forward)) && !player.attack && player.cooldown <= 0 &&
-      player.parryRecovery <= 0 && !player.input.chain.length && !player.input.queue.length) {
-    player.parryTimer = 0.15;
-    player.parryRecovery = 0.35;
-    player.parryPose = 0.2;
-    player.guardMode = null;
-    player.blocking = false;
-    clearComboInput(player.input);
+function fighterAttack(combatant, key, state = inputState, parryShortcut = false) {
+  if (!combatant || !matchActive || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return;
+  const forward = combatant.facing === 1 ? "right" : "left";
+  if (key === "u" && (parryShortcut || state.has(forward)) && !combatant.attack && combatant.cooldown <= 0 &&
+      combatant.parryRecovery <= 0 && !combatant.input.chain.length && !combatant.input.queue.length) {
+    combatant.parryTimer = 0.15;
+    combatant.parryRecovery = 0.35;
+    combatant.parryPose = 0.2;
+    combatant.guardMode = null;
+    combatant.blocking = false;
+    clearComboInput(combatant.input);
     return;
   }
   if (parryShortcut) return;
-  if (player.parryTimer > 0) return;
-  bufferInput(player.input, key === "i" && (inputState.has("down") || player.risingTimer > 0) ? "launcher" : key);
-  if (key === "i" || key === "launcher") player.risingTimer = 0;
-  consumeBufferedAttack(player);
+  if (combatant.parryTimer > 0) return;
+  bufferInput(combatant.input, key === "i" && (state.has("down") || combatant.risingTimer > 0) ? "launcher" : key);
+  if (key === "i" || key === "launcher") combatant.risingTimer = 0;
+  consumeBufferedAttack(combatant);
+}
+
+function playerAttack(key, parryShortcut = false) {
+  fighterAttack(player, key, inputState, parryShortcut);
 }
 
 function consumeBufferedAttack(combatant) {
@@ -1257,17 +1467,44 @@ function retryStage() {
 }
 
 function finishRoundTransition(outcome) {
-  if (outcome !== "champion") victory = null;
+  if (outcome !== "champion" && outcome !== "versus-p1" && outcome !== "versus-p2") victory = null;
   if (outcome === "round") startRound();
   else if (outcome === "stage") showLadder();
   else if (outcome === "continue") showContinue();
-  else {
+  else if (outcome === "versus-p1" || outcome === "versus-p2") {
+    if (victory) victory.champion = true;
+    const p1Won = outcome === "versus-p1";
+    const winnerName = p1Won ? player.definition.name : opponent.definition.name;
+    document.querySelector("#hud").classList.remove("active");
+    const eyebrow = document.querySelector("#result-eyebrow");
+    const subtitle = document.querySelector("#result-subtitle");
+    if (eyebrow) eyebrow.textContent = "2P Local Versus · Best of 3";
+    document.querySelector("#result-title").textContent = p1Won ? "PLAYER 1 WINS!" : "PLAYER 2 WINS!";
+    if (subtitle) subtitle.textContent = `${winnerName.toUpperCase()} WINS THE FLOOR!`;
+    document.querySelector("#result-copy").textContent =
+      `${player.definition.name} ${tournament.roundWins.player} – ${tournament.roundWins.cpu} ${opponent.definition.name}`;
+    const rematchBtn = document.querySelector("#rematch-button");
+    if (rematchBtn) rematchBtn.textContent = "REMATCH";
+    if (versusChangeButton) versusChangeButton.classList.remove("hidden");
+    if (versusMenuButton) versusMenuButton.classList.remove("hidden");
+    resultScreen.classList.add("versus-result");
+    resultScreen.classList.remove("hidden");
+    rematchBtn.focus();
+  } else {
     victory.champion = true;
     document.querySelector("#hud").classList.remove("active");
+    const eyebrow = document.querySelector("#result-eyebrow");
+    const subtitle = document.querySelector("#result-subtitle");
+    if (eyebrow) eyebrow.textContent = "Elezioni 2027 arcade champion";
     document.querySelector("#result-title").textContent = "NUOVO PREMIER!";
+    if (subtitle) subtitle.textContent = "LANDSLIDE VICTORY!";
     document.querySelector("#result-copy").textContent = `${player.definition.name} · FINAL SCORE ${tournament.totalScore} · TOTAL TIME ${formatTournamentTime(victory.totalTime)}`;
-    resultScreen.classList.remove("hidden");
-    document.querySelector("#rematch-button").focus();
+    const rematchBtn = document.querySelector("#rematch-button");
+    if (rematchBtn) rematchBtn.innerHTML = `Play again <span aria-hidden="true">↗</span>`;
+    if (versusChangeButton) versusChangeButton.classList.add("hidden");
+    if (versusMenuButton) versusMenuButton.classList.add("hidden");
+    resultScreen.classList.remove("versus-result", "hidden");
+    rematchBtn.focus();
   }
 }
 
@@ -1377,24 +1614,32 @@ function updateAI(dt) {
 }
 
 function movePlayer(dt) {
-  if (!player) return;
-  if (opponent) player.facing = opponent.x >= player.x ? 1 : -1;
+  moveFighter(player, opponent, inputState, dt);
+}
+
+function moveFighter(combatant, rival, state, dt) {
+  if (!combatant) return;
+  if (rival) combatant.facing = rival.x >= combatant.x ? 1 : -1;
   let direction = 0;
-  if (inputState.has("left")) direction -= 1;
-  if (inputState.has("right")) direction += 1;
-  const inRecovery = (player.recovery || 0) > 0;
-  const canGuard = !inRecovery && !player.airborne && player.landingTime <= 0 && !player.attack &&
-    player.parryTimer <= 0 && (player.stun <= 0 || player.blocking);
-  const away = direction === -player.facing;
-  const lowGuard = inputState.has("down") && (away || inputState.has("guard"));
-  player.guardMode = canGuard && (away || inputState.has("guard") || (direction === 0 && !inputState.has("down"))) ?
+  if (state.has("left")) direction -= 1;
+  if (state.has("right")) direction += 1;
+  const inRecovery = (combatant.recovery || 0) > 0;
+  const canGuard = !inRecovery && !combatant.airborne && combatant.landingTime <= 0 && !combatant.attack &&
+    combatant.parryTimer <= 0 && (combatant.stun <= 0 || combatant.blocking);
+  const away = direction === -combatant.facing;
+  const lowGuard = state.has("down") && (away || state.has("guard"));
+  combatant.guardMode = canGuard && (away || state.has("guard") || (direction === 0 && !state.has("down"))) ?
     (lowGuard ? "low" : "standing") : null;
-  if (!inRecovery && player.blockTimer > 0 && !player.airborne && !player.attack?.special) player.guardMode = "standing";
-  player.blocking = Boolean(player.guardMode);
-  if (player.stun > 0 || inRecovery || player.airborne || player.landingTime > 0 || player.parryTimer > 0) return;
+  if (!inRecovery && combatant.blockTimer > 0 && !combatant.airborne && !combatant.attack?.special) combatant.guardMode = "standing";
+  combatant.blocking = Boolean(combatant.guardMode);
+  if (combatant.stun > 0 || inRecovery || combatant.airborne || combatant.landingTime > 0 || combatant.parryTimer > 0) return;
   if (direction) {
-    player.vx += direction * player.definition.stats.speed * 0.38;
+    combatant.vx += direction * combatant.definition.stats.speed * 0.38;
   }
+}
+
+function movePlayer2(dt) {
+  moveFighter(opponent, player, p2InputState, dt);
 }
 
 function spawnSidestepGhost(combatant) {
@@ -1710,7 +1955,7 @@ function updateCombatant(combatant, dt, opponentBody) {
   combatant.parryRecovery = Math.max(0, (combatant.parryRecovery || 0) - dt);
   combatant.parryPose = Math.max(0, (combatant.parryPose || 0) - dt);
   combatant.risingTimer = Math.max(0, (combatant.risingTimer || 0) - dt);
-  if (!combatant.isPlayer && combatant.blockTimer <= 0) {
+  if (!combatant.isPlayer && (typeof gameMode === "undefined" || gameMode !== "versus") && combatant.blockTimer <= 0) {
     combatant.blocking = false;
     combatant.guardMode = null;
   }
@@ -1737,7 +1982,9 @@ function updateCombatant(combatant, dt, opponentBody) {
     }
   }
 
-  if (combatant.isPlayer && combatant.input) consumeBufferedAttack(combatant);
+  if ((combatant.isPlayer || (typeof gameMode !== "undefined" && gameMode === "versus")) && combatant.input) {
+    consumeBufferedAttack(combatant);
+  }
   const aura = combatant.root.getObjectByName("bossAura");
   if (aura) aura.material.opacity = 0.1 + (Math.sin(combatant.animationTime * 5) + 1) * 0.035;
   combatant.vy -= (combatant.airborne && combatant.juggle?.hits ? 10.5 : 13.5) * dt;
@@ -1955,7 +2202,8 @@ function update(dt) {
   if (dt <= 0) return;
   if (matchActive) {
     movePlayer(dt);
-    updateAI(dt);
+    if (gameMode === "versus") movePlayer2(dt);
+    else updateAI(dt);
     updateCombatant(player, dt, opponent);
     if (matchActive && hitStop <= 0) updateCombatant(opponent, dt, player);
     const pStartupFlash = Boolean(player?.attack?.special && player.attack.age < player.attack.windup);
@@ -2019,14 +2267,15 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-function navigateRoster(key) {
-  const current = fighters.findIndex((fighter) => fighter.id === selectedId);
+function navigateRoster(key, slot = 1) {
+  const currentId = slot === 2 ? p2SelectedId : selectedId;
+  const current = Math.max(0, fighters.findIndex((fighter) => fighter.id === currentId));
   let next = current;
-  if (key === "ArrowRight") next = (current + 1) % fighters.length;
-  if (key === "ArrowLeft") next = (current + fighters.length - 1) % fighters.length;
-  if (key === "ArrowDown") next = (current + 4) % fighters.length;
-  if (key === "ArrowUp") next = (current + fighters.length - 4) % fighters.length;
-  selectFighter(fighters[next].id, true);
+  if (key === "ArrowRight" || key === "d") next = (current + 1) % fighters.length;
+  if (key === "ArrowLeft" || key === "a") next = (current + fighters.length - 1) % fighters.length;
+  if (key === "ArrowDown" || key === "s") next = (current + 4) % fighters.length;
+  if (key === "ArrowUp" || key === "w") next = (current + fighters.length - 4) % fighters.length;
+  selectFighter(fighters[next].id, slot === 1, slot);
 }
 
 function updateTouchVisibility() {
@@ -2041,19 +2290,33 @@ function updateTouchVisibility() {
 function clearInputs() {
   inputState.clear();
   lastTap.up = lastTap.down = 0;
+  if (typeof p2InputState !== "undefined") p2InputState.clear();
+  if (typeof p2LastTap !== "undefined") p2LastTap.up = p2LastTap.down = 0;
   for (const { button } of touchPointers.values()) button.classList.remove("pressed");
   touchPointers.clear();
 }
 
 function sidestep(action) {
-  if (!player || player.stun > 0 || (player.recovery || 0) > 0 || player.airborne || player.landingTime > 0 || player.attack) return;
-  player.vz = (action === "up" ? -1 : 1) * 5.2;
-  player.dodgeTimer = 0.36;
+  fighterSidestep(player, action);
 }
 
 function setInput(action, source, pressed, directSidestep = false) {
-  const change = inputState.set(action, source, pressed);
-  if (change.released && action === "down" && !isPaused && player?.guardMode === "low") player.risingTimer = 0.25;
+  setFighterInput(player, inputState, lastTap, playerAttack, action, source, pressed, directSidestep);
+}
+
+function setP2Input(action, source, pressed, directSidestep = false) {
+  setFighterInput(opponent, p2InputState, p2LastTap, (k, p = false) => fighterAttack(opponent, k, p2InputState, p), action, source, pressed, directSidestep);
+}
+
+function fighterSidestep(combatant, action) {
+  if (!combatant || combatant.stun > 0 || (combatant.recovery || 0) > 0 || combatant.airborne || combatant.landingTime > 0 || combatant.attack) return;
+  combatant.vz = (action === "up" ? -1 : 1) * 5.2;
+  combatant.dodgeTimer = 0.36;
+}
+
+function setFighterInput(combatant, state, tapMap, attackFn, action, source, pressed, directSidestep = false) {
+  const change = state.set(action, source, pressed);
+  if (change.released && action === "down" && !isPaused && combatant?.guardMode === "low") combatant.risingTimer = 0.25;
   if (!change.pressed) return;
   if (action === "pause") {
     if (matchActive || isPaused) setPaused(!isPaused);
@@ -2062,20 +2325,33 @@ function setInput(action, source, pressed, directSidestep = false) {
   if (!matchActive || isPaused) return;
   if (action === "up" || action === "down") {
     const now = performance.now();
-    if (directSidestep || (lastTap[action] && now - lastTap[action] < 280)) {
-      sidestep(action);
-      lastTap[action] = 0;
-    } else lastTap[action] = now;
+    if (directSidestep || (tapMap[action] && now - tapMap[action] < 280)) {
+      fighterSidestep(combatant, action);
+      tapMap[action] = 0;
+    } else tapMap[action] = now;
   }
   const attacks = { punchL: "u", punchR: "i", kickL: "j", kickR: "k", launcher: "launcher", special: "l" };
-  if (action === "parry") playerAttack("u", true);
-  if (attacks[action]) playerAttack(attacks[action]);
+  if (action === "parry") attackFn("u", true);
+  if (attacks[action]) attackFn(attacks[action]);
 }
 
-function handleGamepadMenu(action) {
+function handleGamepadMenu(action, padIndex = 0) {
   const directions = { left: "ArrowLeft", right: "ArrowRight", up: "ArrowUp", down: "ArrowDown" };
   const confirm = action === "kickL" || action === "pause";
   if (!isPaused && !selectScreen.classList.contains("hidden")) {
+    if (typeof gameMode !== "undefined" && gameMode === "versus") {
+      const slot = padIndex > 0 ? 2 : 1;
+      if (directions[action]) {
+        if ((slot === 1 && !p1Locked) || (slot === 2 && !p2Locked)) navigateRoster(directions[action], slot);
+      } else if (confirm) {
+        if (slot === 1) p1Locked = !p1Locked;
+        else p2Locked = !p2Locked;
+        sound.select();
+        updateSelectDisplay();
+        if (p1Locked && p2Locked) beginMatch();
+      }
+      return;
+    }
     if (directions[action]) navigateRoster(directions[action]);
     else if (confirm) beginMatch();
     return;
@@ -2087,7 +2363,7 @@ function handleGamepadMenu(action) {
   } else if (!continueScreen.classList.contains("hidden")) {
     buttons = [document.querySelector("#continue-button"), document.querySelector("#quit-button")];
   } else if (!resultScreen.classList.contains("hidden")) {
-    buttons = [document.querySelector("#rematch-button")];
+    buttons = [...resultScreen.querySelectorAll("button")].filter((btn) => !btn.classList.contains("hidden"));
   } else return;
 
   const index = buttons.indexOf(document.activeElement);
@@ -2101,28 +2377,43 @@ function handleGamepadMenu(action) {
 
 function pollGamepads() {
   const current = new Map();
-  for (const pad of navigator.getGamepads?.() || []) {
-    if (!pad || pad.mapping !== "standard") continue;
+  const pads = [...(navigator.getGamepads?.() || [])].filter((pad) => pad && pad.mapping === "standard");
+  pads.forEach((pad, listIndex) => {
+    const slot = typeof inputManager !== "undefined"
+      ? inputManager.resolveGamepadSlot(listIndex, pads.length)
+      : 1;
+    const isP2 = slot === 2;
     for (const [action, pressed] of Object.entries(gamepadActions(pad))) {
       const source = `gamepad:${pad.index}:${action}`;
-      if (pressed) current.set(source, action);
+      if (pressed) current.set(source, { action, padIndex: listIndex, isP2 });
+    }
+  });
+  for (const [source, entry] of gamepadPrevious) {
+    if (!current.has(source)) {
+      if (entry.isP2 && typeof setP2Input === "function") setP2Input(entry.action, source, false);
+      else setInput(entry.action, source, false);
     }
   }
-  for (const [source, action] of gamepadPrevious) {
-    if (!current.has(source)) setInput(action, source, false);
-  }
-  for (const [source, action] of current) {
+  for (const [source, entry] of current) {
     if (gamepadPrevious.has(source)) continue;
-    if (isPaused && action === "pause") setInput(action, source, true);
-    else if (isPaused || !matchActive) handleGamepadMenu(action);
-    else setInput(action, source, true);
+    if (isPaused && entry.action === "pause") setInput(entry.action, source, true);
+    else if (isPaused || !matchActive) handleGamepadMenu(entry.action, entry.isP2 ? 1 : 0);
+    else if (entry.isP2 && typeof setP2Input === "function") setP2Input(entry.action, source, true);
+    else setInput(entry.action, source, true);
   }
   gamepadPrevious.clear();
-  for (const [source, action] of current) gamepadPrevious.set(source, action);
+  for (const [source, entry] of current) gamepadPrevious.set(source, entry);
+}
+
+function resolveKeyboardAction(event, map) {
+  const code = event.code ? event.code.toLowerCase() : "";
+  const k = event.key ? event.key.toLowerCase() : "";
+  return { token: map[code] ? code : k, action: map[code] || map[k] || null };
 }
 
 window.addEventListener("keydown", (event) => {
   const key = event.key.startsWith("Arrow") ? event.key : event.key.toLowerCase();
+  const codeLower = event.code ? event.code.toLowerCase() : "";
   if ((key === "escape" || key === "p") && (matchActive || isPaused)) {
     event.preventDefault();
     if (!event.repeat) setInput("pause", `keyboard:${key}`, true);
@@ -2166,7 +2457,35 @@ window.addEventListener("keydown", (event) => {
       }
       return;
     }
+    if (typeof versusScreen !== "undefined" && versusScreen && !versusScreen.classList.contains("hidden")) {
+      if (key === "enter" || key === " ") {
+        event.preventDefault();
+        startRound();
+      }
+      return;
+    }
     if (!selectScreen.classList.contains("hidden")) {
+      if (typeof gameMode !== "undefined" && gameMode === "versus") {
+        if ((event.target === modeArcadeButton || event.target === modeVersusButton) && (key === "enter" || key === " ")) return;
+        if (!event.repeat) {
+          if (["a", "d", "w", "s"].includes(key) && !p1Locked) {
+            navigateRoster(key, 1);
+          } else if (key.startsWith("Arrow") && !p2Locked) {
+            navigateRoster(key, 2);
+          } else if (key === "f" || key === "u" || (key === " " && event.target !== startButton)) {
+            p1Locked = !p1Locked;
+            sound.select();
+            updateSelectDisplay();
+            if (p1Locked && p2Locked) beginMatch();
+          } else if (key === "j" || key === "n" || codeLower === "numpad1" || (key === "enter" && event.target !== startButton)) {
+            p2Locked = !p2Locked;
+            sound.select();
+            updateSelectDisplay();
+            if (p1Locked && p2Locked) beginMatch();
+          }
+        }
+        return;
+      }
       if (key.startsWith("Arrow")) navigateRoster(key);
       if (key === "enter" && selectedId) {
         event.preventDefault();
@@ -2175,16 +2494,36 @@ window.addEventListener("keydown", (event) => {
     }
     if (!resultScreen.classList.contains("hidden") && (key === "enter" || key === " ")) {
       event.preventDefault();
-      returnToTitleScreen();
+      if (typeof gameMode !== "undefined" && gameMode === "versus") {
+        const active = document.activeElement;
+        if (active && resultScreen.contains(active) && active.tagName === "BUTTON") active.click();
+        else document.querySelector("#rematch-button").click();
+      } else returnToTitleScreen();
     }
     return;
   }
 
+  if (typeof inputManager !== "undefined") {
+    const resolved = inputManager.resolveKeyboardEvent(event);
+    if (resolved && !event.repeat) {
+      if (resolved.slot === 2) setP2Input(resolved.action, `p2keyboard:${resolved.token}`, true);
+      else setInput(resolved.action, `keyboard:${resolved.token}`, true);
+    }
+    return;
+  }
   const action = keyboardActions[key.toLowerCase()];
   if (action && !event.repeat) setInput(action, `keyboard:${key.toLowerCase()}`, true);
 });
 
 window.addEventListener("keyup", (event) => {
+  if (typeof inputManager !== "undefined") {
+    const resolved = inputManager.resolveKeyboardEvent(event);
+    if (resolved) {
+      if (resolved.slot === 2) setP2Input(resolved.action, `p2keyboard:${resolved.token}`, false);
+      else setInput(resolved.action, `keyboard:${resolved.token}`, false);
+    }
+    return;
+  }
   const key = event.key.toLowerCase();
   const action = keyboardActions[key];
   if (action) setInput(action, `keyboard:${key}`, false);
@@ -2226,11 +2565,24 @@ touchControls.addEventListener("pointerup", releaseTouch);
 touchControls.addEventListener("pointercancel", releaseTouch);
 touchControls.addEventListener("lostpointercapture", releaseTouch);
 
+if (modeArcadeButton) modeArcadeButton.addEventListener("click", () => { sound.select(); setGameMode("arcade"); });
+if (modeVersusButton) modeVersusButton.addEventListener("click", () => { sound.select(); setGameMode("versus"); });
 startButton.addEventListener("click", beginMatch);
 document.querySelector("#next-stage-button").addEventListener("click", startRound);
 document.querySelector("#continue-button").addEventListener("click", retryStage);
 document.querySelector("#quit-button").addEventListener("click", returnToTitleScreen);
-document.querySelector("#rematch-button").addEventListener("click", returnToTitleScreen);
+document.querySelector("#rematch-button").addEventListener("click", () => {
+  if (gameMode === "versus" && tournament) {
+    tournament.retry();
+    matchActive = false;
+    victory = null;
+    startRound();
+  } else {
+    returnToTitleScreen();
+  }
+});
+if (versusChangeButton) versusChangeButton.addEventListener("click", () => returnToTitleScreen("versus"));
+if (versusMenuButton) versusMenuButton.addEventListener("click", () => returnToTitleScreen("arcade"));
 document.querySelector("#change-fighter-button").addEventListener("click", returnToTitleScreen);
 pauseButton.addEventListener("click", () => setPaused(true));
 document.querySelector("#resume-button").addEventListener("click", () => setPaused(false));

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#16121d">
     <title>Montecitorio: Floor Fight!</title>
-    <link rel="stylesheet" href="./style.css?v=5">
+    <link rel="stylesheet" href="./style.css?v=7">
   </head>
   <body>
     <main class="game-shell">
@@ -36,7 +36,7 @@
             <div class="fighter-heading"><span class="player-tag">1P</span><strong id="player-name">—</strong></div>
             <div class="round-orbs" id="player-orbs" aria-label="Player round wins"><span class="round-orb"></span><span class="round-orb"></span></div>
             <div class="health-track"><span id="player-trail" class="health-trail"></span><span id="player-health" class="health-fill"></span></div>
-            <div class="health-caption"><span>CONSENSO</span><span id="player-percent">100%</span></div>
+            <div class="health-caption"><span id="player-health-label">CONSENSO</span><span id="player-percent">100%</span></div>
             <div class="super-row">
               <div id="player-super-track" class="super-track"><span id="player-super-fill" class="super-fill"></span></div>
               <span id="player-super-percent" class="super-percent">0%</span>
@@ -49,10 +49,10 @@
             <button id="pause-button" class="pause-button" type="button" aria-controls="pause-screen" aria-expanded="false">PAUSE / MOVES [ESC]</button>
           </div>
           <div class="combatant combatant-right">
-            <div class="fighter-heading"><strong id="opponent-name">—</strong><span class="player-tag cpu-tag">CPU</span></div>
-            <div class="round-orbs round-orbs-right" id="opponent-orbs" aria-label="CPU round wins"><span class="round-orb"></span><span class="round-orb"></span></div>
+            <div class="fighter-heading"><strong id="opponent-name">—</strong><span id="opponent-tag" class="player-tag cpu-tag">CPU</span></div>
+            <div class="round-orbs round-orbs-right" id="opponent-orbs" aria-label="Opponent round wins"><span class="round-orb"></span><span class="round-orb"></span></div>
             <div class="health-track"><span id="opponent-trail" class="health-trail"></span><span id="opponent-health" class="health-fill"></span></div>
-            <div class="health-caption"><span>APPROVAZIONE</span><span id="opponent-percent">100%</span></div>
+            <div class="health-caption"><span id="opponent-health-label">APPROVAZIONE</span><span id="opponent-percent">100%</span></div>
             <div class="super-row super-row-right">
               <span id="opponent-super-percent" class="super-percent">0%</span>
               <div id="opponent-super-track" class="super-track"><span id="opponent-super-fill" class="super-fill"></span></div>
@@ -91,8 +91,12 @@
               <span class="eyebrow">Choose your representative</span>
               <span class="select-count">01 / 08</span>
             </div>
+            <div class="mode-switcher" role="tablist" aria-label="Game mode">
+              <button id="mode-arcade" class="mode-tab active" type="button" role="tab" aria-selected="true">[ 1P ARCADE LADDER ]</button>
+              <button id="mode-versus" class="mode-tab" type="button" role="tab" aria-selected="false">[ 2P LOCAL VERSUS ]</button>
+            </div>
             <h2>Select your <em>fighter</em></h2>
-            <p class="select-intro">ELEZIONI 2027 ARCADE LADDER · Seven rivals and a final boss await.</p>
+            <p id="select-intro" class="select-intro">ELEZIONI 2027 ARCADE LADDER · Seven rivals and a final boss await.</p>
             <div id="roster" class="roster" role="listbox" aria-label="Select a fighter"></div>
             <div class="select-footer">
               <div id="fighter-detail" class="fighter-detail">
@@ -103,7 +107,7 @@
               </div>
               <button id="start-button" class="primary-button" disabled>Enter the chamber <span aria-hidden="true">↗</span></button>
             </div>
-            <p class="select-hint">CLICK A PORTRAIT OR USE THE ARROW KEYS · ENTER TO CONFIRM</p>
+            <p id="select-hint" class="select-hint">CLICK A PORTRAIT OR USE THE ARROW KEYS · ENTER TO CONFIRM</p>
           </div>
         </section>
         <div id="vs-flash" class="vs-flash hidden" aria-hidden="true"><span>VS</span></div>
@@ -131,6 +135,19 @@
           </div>
         </section>
 
+        <section id="versus-screen" class="tournament-screen hidden" aria-label="2-Player Versus Matchup">
+          <div class="tournament-panel versus-panel">
+            <span class="challenger-flash">1P vs 2P — READY TO DEBATE!</span>
+            <h2>MONTECITORIO SHOWDOWN</h2>
+            <div class="versus-portraits">
+              <figure><canvas id="vs-player-portrait" width="96" height="112" aria-hidden="true"></canvas><figcaption id="vs-player-name"></figcaption></figure>
+              <strong class="versus-mark">VS</strong>
+              <figure><canvas id="vs-opponent-portrait" width="96" height="112" aria-hidden="true"></canvas><figcaption id="vs-opponent-name"></figcaption></figure>
+            </div>
+            <p id="vs-mirror-note" class="versus-mirror-note">BEST OF 3 ROUNDS · FIRST TO 2 WINS</p>
+          </div>
+        </section>
+
         <section id="continue-screen" class="tournament-screen hidden" aria-label="Continue tournament">
           <div class="tournament-panel continue-panel">
             <span class="eyebrow">The chamber has spoken</span>
@@ -143,11 +160,15 @@
 
         <section id="result-screen" class="result-screen hidden">
           <div class="result-card">
-            <span class="eyebrow">Elezioni 2027 arcade champion</span>
+            <span id="result-eyebrow" class="eyebrow">Elezioni 2027 arcade champion</span>
             <h2 id="result-title">NUOVO PREMIER!</h2>
-            <strong class="champion-subtitle">LANDSLIDE VICTORY!</strong>
+            <strong id="result-subtitle" class="champion-subtitle">LANDSLIDE VICTORY!</strong>
             <p id="result-copy"></p>
-            <button id="rematch-button" class="primary-button">Play again <span aria-hidden="true">↗</span></button>
+            <div class="result-actions">
+              <button id="rematch-button" class="primary-button">Play again <span aria-hidden="true">↗</span></button>
+              <button id="versus-change-button" class="secondary-button hidden" type="button">CHANGE FIGHTERS</button>
+              <button id="versus-menu-button" class="secondary-button hidden" type="button">MAIN MENU</button>
+            </div>
           </div>
         </section>
 
@@ -165,7 +186,7 @@
             <div class="pause-lists">
               <section aria-labelledby="controls-title">
                 <h3 id="controls-title">UNIVERSAL CONTROLS</h3>
-                <dl class="move-list">
+                <dl id="pause-controls-list" class="move-list">
                   <div><dt><kbd>A</kbd> / <kbd>D</kbd></dt><dd>Walk</dd></div>
                   <div><dt><kbd>W</kbd><kbd>W</kbd> / <kbd>S</kbd><kbd>S</kbd></dt><dd>3D sidestep</dd></div>
                   <div><dt>Hold back</dt><dd>Standing guard</dd></div>
@@ -176,7 +197,7 @@
               </section>
               <section aria-labelledby="combos-title">
                 <h3 id="combos-title">COMBO STRINGS</h3>
-                <dl class="move-list">
+                <dl id="pause-combos-list" class="move-list">
                   <div><dt><kbd>U</kbd> → <kbd>U</kbd> → <kbd>I</kbd></dt><dd>1-2-Straight Knockdown</dd></div>
                   <div><dt><kbd>U</kbd> → <kbd>I</kbd> → <kbd>K</kbd></dt><dd>Parliamentary Roundhouse</dd></div>
                   <div><dt><kbd>J</kbd> → <kbd>K</kbd> → <kbd>K</kbd></dt><dd>Double Kick Filibuster</dd></div>
@@ -199,7 +220,7 @@
 
       <p class="disclaimer">A playful work of political satire. No actual parliamentary procedure was harmed.</p>
     </main>
-    <script id="game-module" type="module" src="./game.js?v=5"></script>
+    <script id="game-module" type="module" src="./game.js?v=7"></script>
     <script>
       function showStartupError() {
         document.querySelector("#engine-error").classList.remove("hidden");
