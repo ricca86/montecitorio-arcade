@@ -12,6 +12,7 @@ import * as fighterModel from "../fighter-model.js";
 import * as arenaMod from "../arena.js";
 import * as atmosphereMod from "../atmosphere.js";
 import * as superMeter from "../super-meter.js";
+import { getWinQuote, startQuoteTypewriter } from "../win-quotes.js";
 
 const gameJs = await readFile(new URL("../game.js", import.meta.url), "utf8");
 
@@ -111,8 +112,9 @@ test("2P Local Versus mode switches UI, locks dual cursors, routes P2 controls, 
       setPixelRatio() {} setSize() {} render() {}
     }
   };
+  const intervals = [];
   const ctx = vm.createContext({
-    THREE: MockTHREE, fighters, sound, TournamentManager, VersusManager, difficultyForStage, formatTournamentTime,
+    THREE: MockTHREE, fighters, sound, getWinQuote, startQuoteTypewriter, TournamentManager, VersusManager, difficultyForStage, formatTournamentTime,
     ...combo, ...defense, ...input, ...fighterModel, ...arenaMod, ...atmosphereMod, ...superMeter,
     document: doc,
     window: {
@@ -125,7 +127,10 @@ test("2P Local Versus mode switches UI, locks dual cursors, routes P2 controls, 
     navigator: { maxTouchPoints: 0, getGamepads: () => [] },
     performance, requestAnimationFrame: () => 1,
     setTimeout: (cb, delay) => { scheduled.push({ cb, delay }); return scheduled.length; },
-    clearTimeout() {}, setInterval: () => 1, clearInterval() {}, Math
+    clearTimeout() {},
+    setInterval: (cb) => { intervals.push(cb); return intervals.length; },
+    clearInterval(id) { if (id >= 1 && id <= intervals.length) intervals[id - 1] = null; },
+    Math
   });
   vm.runInContext(gameJs.slice(gameJs.indexOf("const mount =")), ctx);
 
@@ -205,9 +210,16 @@ test("2P Local Versus mode switches UI, locks dual cursors, routes P2 controls, 
   assert.ok(getEl("#pause-combos-list").innerHTML.includes("<kbd>O</kbd>"));
   ctx.setPaused(false);
 
-  // Finish 2P match with P2 victory -> check PLAYER 2 WINS & 3 buttons visible
+  // Finish 2P match with P2 victory -> check PLAYER 2 WINS, quote typewriter & 3 buttons visible
   ctx.finishRoundTransition("versus-p2");
   assert.equal(getEl("#result-title").textContent, "PLAYER 2 WINS!");
+  assert.equal(getEl("#result-quote").classList.contains("hidden"), false);
+  assert.equal(getEl("#result-quote").classList.contains("is-typing"), true);
+  assert.equal(getEl("#result-quote").dataset.fullQuote, "TANTE CHIACCHIERE, ZERO COMBO. TORNA IN PANCHINA!");
+  const activeTicker = intervals.find(Boolean);
+  assert.ok(activeTicker);
+  while (getEl("#result-quote").classList.contains("is-typing")) activeTicker();
+  assert.equal(getEl("#result-quote").textContent, "TANTE CHIACCHIERE, ZERO COMBO. TORNA IN PANCHINA!");
   assert.equal(getEl("#rematch-button").textContent, "REMATCH");
   assert.equal(getEl("#versus-change-button").classList.contains("hidden"), false);
   assert.equal(getEl("#versus-menu-button").classList.contains("hidden"), false);

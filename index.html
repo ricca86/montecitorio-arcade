@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#16121d">
     <title>Montecitorio: Floor Fight!</title>
-    <link rel="stylesheet" href="./style.css?v=7">
+    <link rel="stylesheet" href="./style.css?v=8">
   </head>
   <body>
     <main class="game-shell">
@@ -163,6 +163,7 @@
             <span id="result-eyebrow" class="eyebrow">Elezioni 2027 arcade champion</span>
             <h2 id="result-title">NUOVO PREMIER!</h2>
             <strong id="result-subtitle" class="champion-subtitle">LANDSLIDE VICTORY!</strong>
+            <blockquote id="result-quote" class="victory-quote hidden" aria-live="polite"></blockquote>
             <p id="result-copy"></p>
             <div class="result-actions">
               <button id="rematch-button" class="primary-button">Play again <span aria-hidden="true">↗</span></button>
@@ -220,7 +221,7 @@
 
       <p class="disclaimer">A playful work of political satire. No actual parliamentary procedure was harmed.</p>
     </main>
-    <script id="game-module" type="module" src="./game.js?v=7"></script>
+    <script id="game-module" type="module" src="./game.js?v=8"></script>
     <script>
       function showStartupError() {
         document.querySelector("#engine-error").classList.remove("hidden");

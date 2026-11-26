@@ -464,6 +464,98 @@ function knockout() {
 }
 
 /**
+ * Per-leader vocal-style formant pitch profiles for Victory Screen typewriter blips:
+ * - Bass tier: salvini, calenda
+ * - Baritone tier: conte, tajani, bonelli, renzi
+ * - Higher tier: meloni, schlein
+ */
+export const VOICE_PROFILES = {
+  salvini: { baseHz: 112, formantHz: 680, wave: "sawtooth" },
+  calenda: { baseHz: 124, formantHz: 760, wave: "sawtooth" },
+  conte: { baseHz: 152, formantHz: 920, wave: "triangle" },
+  tajani: { baseHz: 162, formantHz: 980, wave: "triangle" },
+  bonelli: { baseHz: 170, formantHz: 1040, wave: "triangle" },
+  renzi: { baseHz: 184, formantHz: 1120, wave: "sawtooth" },
+  schlein: { baseHz: 238, formantHz: 1300, wave: "triangle" },
+  meloni: { baseHz: 256, formantHz: 1380, wave: "triangle" }
+};
+
+export const VICTORY_FANFARE_NOTES = [261.63, 392.00, 523.25]; // C4 -> G4 -> C5
+
+/**
+ * Character-pitched 25ms formant-filtered voice blip for victory quote typewriter text.
+ */
+function voiceBlip(characterId = "", char = "") {
+  if (!context || !sfxEnabled) return;
+  if (typeof char === "string" && char.length > 0 && /^\s+$/.test(char)) return;
+  const profile = VOICE_PROFILES[characterId] || { baseHz: 176, formantHz: 1000, wave: "triangle" };
+  const now = context.currentTime;
+  const duration = 0.025;
+  const code = typeof char === "string" && char.length > 0 ? char.charCodeAt(0) : 65;
+  const inflection = 0.96 + ((code % 7) * 0.018);
+  const startFreq = profile.baseHz * inflection;
+
+  const osc = context.createOscillator();
+  const formant = context.createBiquadFilter();
+  const gain = context.createGain();
+
+  osc.type = profile.wave;
+  osc.frequency.setValueAtTime(startFreq, now);
+  osc.frequency.exponentialRampToValueAtTime(startFreq * 1.08, now + duration);
+
+  formant.type = "bandpass";
+  formant.frequency.setValueAtTime(profile.formantHz, now);
+  if (formant.Q && typeof formant.Q.setValueAtTime === "function") {
+    formant.Q.setValueAtTime(3.2, now);
+  }
+
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.14, now + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0008, now + duration);
+
+  osc.connect(formant);
+  formant.connect(gain);
+  connectWithPan(gain, sfxBus, 0);
+
+  osc.start(now);
+  osc.stop(now + duration);
+}
+
+/**
+ * 3-note 90s arcade brass-synth fanfare (C4 -> G4 -> C5) with warm low-pass filter sweep.
+ */
+function victoryFanfare() {
+  if (!context || !sfxEnabled) return;
+  const now = context.currentTime;
+
+  const brassFilter = context.createBiquadFilter();
+  brassFilter.type = "lowpass";
+  brassFilter.frequency.setValueAtTime(520, now);
+  brassFilter.frequency.exponentialRampToValueAtTime(2950, now + 0.34);
+  brassFilter.frequency.exponentialRampToValueAtTime(1400, now + 0.86);
+  if (brassFilter.Q && typeof brassFilter.Q.setValueAtTime === "function") {
+    brassFilter.Q.setValueAtTime(1.6, now);
+  }
+  brassFilter.connect(sfxBus);
+
+  const steps = [
+    { freq: VICTORY_FANFARE_NOTES[0], offset: 0.00, duration: 0.16, pan: -0.18, vol: 0.16 },
+    { freq: VICTORY_FANFARE_NOTES[1], offset: 0.14, duration: 0.18, pan: 0.18, vol: 0.18 },
+    { freq: VICTORY_FANFARE_NOTES[2], offset: 0.28, duration: 0.58, pan: 0.0, vol: 0.22 }
+  ];
+
+  for (const note of steps) {
+    const start = now + note.offset;
+    // Dual detuned sawtooth brass + warm triangle body
+    playTone(note.freq, note.freq * 1.003, note.duration, note.vol, "sawtooth", start, brassFilter, note.pan);
+    playTone(note.freq * 1.005, note.freq * 1.007, note.duration, note.vol * 0.72, "sawtooth", start, brassFilter, -note.pan * 0.6);
+    playTone(note.freq * 0.5, note.freq * 0.5, note.duration, note.vol * 0.55, "triangle", start, brassFilter, note.pan);
+  }
+  // Harmonic fifth shimmer under the triumphant final C5 stab
+  playTone(VICTORY_FANFARE_NOTES[1], VICTORY_FANFARE_NOTES[1], 0.54, 0.10, "sawtooth", now + 0.28, brassFilter, -0.12);
+}
+
+/**
  * Empty click cue when L is pressed below 100% Super Meter.
  */
 function emptyClick() {
@@ -482,6 +574,8 @@ export const sound = {
   impact,
   parry,
   knockout,
+  voiceBlip,
+  victoryFanfare,
   emptyClick,
   specialWindup,
   setMusicEnabled(enabled) {

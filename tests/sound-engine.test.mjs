@@ -135,6 +135,41 @@ test("sound-engine synthesizes PS1 combat SFX, FM menu blips, 138 BPM pentatonic
     assert.ok(created.some((n) => n.kind === "oscillator" && n.type === "sawtooth"));
     assert.ok(created.some((n) => n.kind === "oscillator" && n.type === "sine" && n.startedAt > 0));
 
+    // Character-pitched 25ms formant voice blips (bass vs baritone vs high tier) + space skip
+    const { VOICE_PROFILES, VICTORY_FANFARE_NOTES } = mod;
+    assert.ok(VOICE_PROFILES.salvini.baseHz < VOICE_PROFILES.conte.baseHz);
+    assert.ok(VOICE_PROFILES.conte.baseHz < VOICE_PROFILES.meloni.baseHz);
+
+    resetLog();
+    sound.voiceBlip("salvini", "A");
+    const bassOsc = created.find((n) => n.kind === "oscillator");
+    const bassFormant = created.find((n) => n.kind === "filter");
+    assert.ok(bassOsc);
+    assert.ok(Math.abs((bassOsc.stoppedAt - bassOsc.startedAt) - 0.025) < 1e-6);
+    assert.equal(bassFormant.type, "bandpass");
+    assert.equal(bassFormant.frequency.calls[0].value, VOICE_PROFILES.salvini.formantHz);
+
+    resetLog();
+    sound.voiceBlip("meloni", "A");
+    const highOsc = created.find((n) => n.kind === "oscillator");
+    assert.ok(highOsc.frequency.calls[0].value > bassOsc.frequency.calls[0].value * 1.8);
+
+    resetLog();
+    sound.voiceBlip("meloni", " ");
+    assert.equal(created.length, 0, "Spaces should not emit typewriter blips");
+
+    // 3-note C4 -> G4 -> C5 arcade brass victory fanfare with warm low-pass sweep
+    assert.deepEqual(VICTORY_FANFARE_NOTES, [261.63, 392.00, 523.25]);
+    resetLog();
+    sound.victoryFanfare();
+    const fanfareFilter = created.find((n) => n.kind === "filter");
+    assert.equal(fanfareFilter.type, "lowpass");
+    assert.ok(fanfareFilter.frequency.calls.some((c) => c.value >= 2500));
+    const fanfareOscs = created.filter((n) => n.kind === "oscillator");
+    assert.ok(fanfareOscs.some((o) => Math.abs(o.frequency.calls[0].value - 261.63) < 0.1));
+    assert.ok(fanfareOscs.some((o) => Math.abs(o.frequency.calls[0].value - 392.00) < 0.1));
+    assert.ok(fanfareOscs.some((o) => Math.abs(o.frequency.calls[0].value - 523.25) < 0.1));
+
     // K.O. deep reverberating downward gong
     resetLog();
     sound.knockout();
@@ -142,12 +177,14 @@ test("sound-engine synthesizes PS1 combat SFX, FM menu blips, 138 BPM pentatonic
     const koOsc = created.find((n) => n.kind === "oscillator" && n.type === "sine");
     assert.ok(koOsc.frequency.calls[1].value < koOsc.frequency.calls[0].value);
 
-    // SFX mute toggle blocks SFX without breaking music
+    // SFX mute toggle blocks SFX (including voiceBlip & fanfare) without breaking music
     sound.setSfxEnabled(false);
     assert.equal(sound.isSfxEnabled(), false);
     resetLog();
     sound.impact({ blocked: true });
     sound.parry();
+    sound.voiceBlip("meloni", "X");
+    sound.victoryFanfare();
     assert.equal(created.length, 0);
     sound.setSfxEnabled(true);
 

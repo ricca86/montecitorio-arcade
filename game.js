@@ -1,6 +1,7 @@
 import * as THREE from "./vendor/three/three.module.min.js";
 import { fighters } from "./fighters.js";
 import { sound } from "./sound-engine.js";
+import { getWinQuote, startQuoteTypewriter } from "./win-quotes.js";
 import { TournamentManager, VersusManager, difficultyForStage, formatTournamentTime } from "./tournament.js";
 import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
 import { attackHeight, defenseOutcome, isCounterHit } from "./defense.js";
@@ -150,6 +151,7 @@ let tournament = null;
 let tournamentStartedAt = 0;
 let ladderTimeout = null;
 let versusTimeout = null;
+let stopVictoryQuote = null;
 let continueInterval = null;
 let continueDeadline = 0;
 let matchActive = false;
@@ -605,6 +607,7 @@ function startRound() {
   clearTimeout(versusTimeout);
   ladderTimeout = null;
   versusTimeout = null;
+  if (typeof clearVictoryQuote === "function") clearVictoryQuote();
   clearCombatEffects();
   clearInputs();
   arena.resetProps();
@@ -772,6 +775,7 @@ function returnToTitleScreen(targetMode = null) {
   clearInterval(continueInterval);
   continueInterval = null;
   continueDeadline = 0;
+  if (typeof clearVictoryQuote === "function") clearVictoryQuote();
   clearInputs();
   sound.stopMatch();
   matchActive = false;
@@ -1466,6 +1470,38 @@ function retryStage() {
   showLadder();
 }
 
+function clearVictoryQuote() {
+  if (typeof stopVictoryQuote === "function") {
+    stopVictoryQuote();
+    stopVictoryQuote = null;
+  }
+  const quoteNode = document.querySelector("#result-quote");
+  if (quoteNode) {
+    quoteNode.textContent = "";
+    quoteNode.classList.remove("is-typing");
+    quoteNode.classList.add("hidden");
+  }
+}
+
+function renderVictoryQuote(winner, loser) {
+  clearVictoryQuote();
+  const quoteNode = document.querySelector("#result-quote");
+  if (!quoteNode || typeof getWinQuote !== "function") return;
+  const quote = getWinQuote(winner?.definition, loser?.definition);
+  if (!quote) return;
+  quoteNode.classList.remove("hidden");
+  const speakerId = winner?.definition?.id || "";
+  stopVictoryQuote = typeof startQuoteTypewriter === "function"
+    ? startQuoteTypewriter(quoteNode, quote, {
+      setTimer: setInterval,
+      clearTimer: clearInterval,
+      onStep: (_index, currentText) => {
+        sound.voiceBlip?.(speakerId, currentText.slice(-1));
+      }
+    })
+    : (() => { quoteNode.textContent = quote; return () => {}; })();
+}
+
 function finishRoundTransition(outcome) {
   if (outcome !== "champion" && outcome !== "versus-p1" && outcome !== "versus-p2") victory = null;
   if (outcome === "round") startRound();
@@ -1474,13 +1510,17 @@ function finishRoundTransition(outcome) {
   else if (outcome === "versus-p1" || outcome === "versus-p2") {
     if (victory) victory.champion = true;
     const p1Won = outcome === "versus-p1";
-    const winnerName = p1Won ? player.definition.name : opponent.definition.name;
+    const winner = p1Won ? player : opponent;
+    const loser = p1Won ? opponent : player;
+    const winnerName = winner.definition.name;
     document.querySelector("#hud").classList.remove("active");
     const eyebrow = document.querySelector("#result-eyebrow");
     const subtitle = document.querySelector("#result-subtitle");
     if (eyebrow) eyebrow.textContent = "2P Local Versus · Best of 3";
     document.querySelector("#result-title").textContent = p1Won ? "PLAYER 1 WINS!" : "PLAYER 2 WINS!";
     if (subtitle) subtitle.textContent = `${winnerName.toUpperCase()} WINS THE FLOOR!`;
+    sound.victoryFanfare?.();
+    renderVictoryQuote(winner, loser);
     document.querySelector("#result-copy").textContent =
       `${player.definition.name} ${tournament.roundWins.player} – ${tournament.roundWins.cpu} ${opponent.definition.name}`;
     const rematchBtn = document.querySelector("#rematch-button");
@@ -1498,6 +1538,8 @@ function finishRoundTransition(outcome) {
     if (eyebrow) eyebrow.textContent = "Elezioni 2027 arcade champion";
     document.querySelector("#result-title").textContent = "NUOVO PREMIER!";
     if (subtitle) subtitle.textContent = "LANDSLIDE VICTORY!";
+    sound.victoryFanfare?.();
+    renderVictoryQuote(player, opponent);
     document.querySelector("#result-copy").textContent = `${player.definition.name} · FINAL SCORE ${tournament.totalScore} · TOTAL TIME ${formatTournamentTime(victory.totalTime)}`;
     const rematchBtn = document.querySelector("#rematch-button");
     if (rematchBtn) rematchBtn.innerHTML = `Play again <span aria-hidden="true">↗</span>`;
