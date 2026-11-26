@@ -41,10 +41,12 @@ test("best of three, score, streak, retry and champion progression", () => {
 
 test("stage difficulty escalates and boss health and damage increase by 20 percent", () => {
   assert.equal(difficultyForStage(0).combo, 1);
+  assert.equal(difficultyForStage(0).reactionSkill, 0.25);
   assert.equal(difficultyForStage(2).block, 0.4);
   assert.equal(difficultyForStage(4).combo, 2);
   assert.ok(difficultyForStage(5).launcher > 0);
   assert.ok(difficultyForStage(6).special > 0);
+  assert.equal(difficultyForStage(7).reactionSkill, 0.8);
   assert.equal(difficultyForStage(7).health, 120);
   assert.equal(difficultyForStage(7).damage, 1.2);
   assert.equal(difficultyForStage(7).combo, 3);

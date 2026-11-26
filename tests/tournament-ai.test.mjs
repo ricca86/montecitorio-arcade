@@ -96,3 +96,86 @@ test("AI obeys Super Meter and anti-spam special limits", () => {
   alreadyUsed.context.updateAI(0.04);
   assert.deepEqual(alreadyUsed.calls, ["launcher"]);
 });
+
+test("tactical spacing classifies FAR, MID, STRIKE, DANGER and weaves footsies / sidesteps linear threats", () => {
+  const { context, opponent, player } = setup(5, 0.05);
+  assert.equal(context.classifyAIRange(4.0, null), "FAR");
+  assert.equal(context.classifyAIRange(2.2, null), "MID");
+  assert.equal(context.classifyAIRange(1.2, null), "STRIKE");
+  assert.equal(context.classifyAIRange(1.6, { age: 0.14, windup: 0.1, duration: 0.4, range: 1.8, connected: false }), "DANGER");
+
+  // MID range transitions into FOOTSIE instead of blindly suicide-rushing
+  opponent.x = 2.4;
+  opponent.aiState = "IDLE";
+  context.updateAI(0.05);
+  assert.equal(opponent.aiRange, "MID");
+  assert.equal(opponent.aiState, "FOOTSIE");
+
+  // Linear rightPunch / launcher within range triggers 3D sidestep with dodge frames
+  opponent.x = 2.0;
+  opponent.aiState = "FOOTSIE";
+  player.attack = { kind: "punch", limb: "rightPunch", age: 0.01, windup: 0.12, duration: 0.36 };
+  context.updateAI(0.04);
+  assert.equal(opponent.aiState, "SIDESTEP");
+  assert.ok(opponent.dodgeTimer > 0);
+  assert.notEqual(opponent.vz, 0);
+});
+
+test("AI uses crouch guard against low kicks, holds guard through 3-hit strings, and dashes to whiff-punish", () => {
+  // Low kick -> Crouch Guard ("low")
+  const lowGuard = setup(7, 0.2);
+  lowGuard.player.attack = { kind: "kick", limb: "leftKick", low: true, height: "low", age: 0, windup: 0.12 };
+  lowGuard.context.updateAI(0.03);
+  assert.equal(lowGuard.opponent.guardMode, "low");
+
+  // High/Mid combo string -> holds standing guard while P1 swings, then counter-punishes on recovery
+  const stringDef = setup(7, 0.2);
+  stringDef.player.input = { chain: ["u", "u"] };
+  stringDef.player.attack = { kind: "punch", height: "high", age: 0.05, windup: 0.1 };
+  stringDef.context.updateAI(0.03);
+  assert.equal(stringDef.opponent.guardMode, "standing");
+  assert.deepEqual(stringDef.calls, []);
+  stringDef.player.attack = null;
+  stringDef.player.input.chain = [];
+  stringDef.context.updateAI(0.03);
+  assert.ok(stringDef.calls.length >= 1, "AI should immediately counter-punish once P1 combo finishes");
+
+  // Whiff punish on progress > 0.55 dashes forward from mid range and queues punish
+  const whiff = setup(5, 0.9, { x: 2.1, vx: 0 });
+  whiff.player.attack = { kind: "heavy", height: "mid", age: 0.26, duration: 0.4, windup: 0.14, connected: false };
+  whiff.context.updateAI(0.03);
+  assert.ok(whiff.opponent.vx < 0, "AI should dash forward toward P1 at x=0 to whiff punish");
+  assert.ok(whiff.calls.length >= 1);
+});
+
+test("AI executes full dial-a-combo queues, 2-hit air juggles, and avoids wasting Super Meter at FAR range", () => {
+  // Full dial-a-combo queue chains step by step without waiting for idle reset
+  const comboAI = setup(7, 0.1, { x: 1.4, aiState: "ATTACK", aiQueue: ["u", "u2", "u-u-i"] });
+  comboAI.context.updateAI(0.02);
+  assert.deepEqual(comboAI.calls, ["punch"]);
+  comboAI.opponent.attack = { kind: "punch", age: 0.2, windup: 0.08, duration: 0.33, connected: true };
+  comboAI.context.updateAI(0.02);
+  assert.deepEqual(comboAI.calls, ["punch", "punch"]);
+  comboAI.opponent.attack = { kind: "punch", age: 0.2, windup: 0.08, duration: 0.33, connected: true };
+  comboAI.context.updateAI(0.02);
+  assert.deepEqual(comboAI.calls, ["punch", "punch", "combo-finisher"]);
+
+  // Never wastes Signature Special blindly from FAR distance (> 3.2 units)
+  const farAI = setup(7, 0.0, { x: 4.5, aiState: "ATTACK", superMeter: 100 });
+  farAI.context.updateAI(0.02);
+  assert.equal(farAI.calls.includes("special"), false);
+
+  // Uses Signature Special as a close-range round closer when P1 health <= 32
+  const closerAI = setup(7, 0.0, { x: 1.5, aiState: "ATTACK", superMeter: 100 });
+  closerAI.player.health = 24;
+  closerAI.context.updateAI(0.02);
+  assert.deepEqual(closerAI.calls, ["special"]);
+
+  // Air-juggle conversion triggers 2 follow-up kicks when P1 is launched into the air
+  const juggler = setup(7, 0.9, { x: 1.5 });
+  juggler.player.y = 0.9;
+  juggler.context.updateAI(0.02);
+  juggler.opponent.attack = { kind: "kick", age: 0.2, windup: 0.08, duration: 0.36, connected: true };
+  juggler.context.updateAI(0.02);
+  assert.deepEqual(juggler.calls, ["kick", "kick"]);
+});

@@ -231,6 +231,12 @@ function createCombatant(definition, x, z, facing, isPlayer, options = {}) {
     aiTimer: random(0.3, 0.9),
     aiCombo: 0,
     aiSide: 0,
+    aiQueue: [],
+    aiRange: "MID",
+    aiFootsieDir: 1,
+    desiredGuardMode: null,
+    aiGuardComboPending: false,
+    aiBlockedComboCount: 0,
     walkPhase: 0
   };
 }
@@ -1554,104 +1560,324 @@ function setAIState(state, duration = random(0.25, 0.65)) {
   if (!opponent) return;
   opponent.aiState = state;
   opponent.aiTimer = duration;
-  opponent.aiSide = state === "SIDESTEP" ? (Math.random() < 0.5 ? -1 : 1) : 0;
+  if (state === "SIDESTEP") opponent.aiSide = Math.random() < 0.5 ? -1 : 1;
+  else if (state === "FOOTSIE") opponent.aiFootsieDir = Math.random() < 0.55 ? 1 : -1;
+  else opponent.aiSide = 0;
+}
+
+const AI_COMBO_ROUTES = {
+  lightChain: ["u", "u2", "u-u-i"],
+  mixupChain: ["u", "i", "u-i-k"],
+  lowChain: ["j", "k", "j-k-k"],
+  juggleStarter: ["u", "u2", "launcher", "k", "k"],
+  punishJuggle: ["launcher", "k", "k"]
+};
+
+function classifyAIRange(distance, playerAttack) {
+  if (playerAttack && !playerAttack.connected) {
+    const duration = Math.max(playerAttack.duration || 0.36, 0.001);
+    const windup = playerAttack.windup ?? duration * 0.3;
+    const age = playerAttack.age || 0;
+    const reach = Math.max(playerAttack.range || 1.6, 1.85);
+    if (age >= windup * 0.65 && age <= duration * 0.85 && distance <= reach) return "DANGER";
+  }
+  if (distance > 3.2) return "FAR";
+  if (distance >= 1.6) return "MID";
+  return "STRIKE";
+}
+
+function isLinearRightThreat(attack) {
+  if (!attack || attack.special || attack.projectile) return false;
+  return (attack.kind === "launcher" ||
+    attack.kind === "combo-finisher" ||
+    (attack.kind === "punch" && attack.limb === "rightPunch"));
+}
+
+function isPlayerWhiff(attack) {
+  if (!attack || attack.connected) return false;
+  const duration = Math.max(attack.duration || 0.36, 0.001);
+  const progress = (attack.age || 0) / duration;
+  return Boolean(attack.hit) || progress > 0.55;
+}
+
+function chooseAIComboQueue(ai, { isPunish = false } = {}) {
+  const difficulty = ai.difficulty;
+  if ((difficulty.combo || 1) <= 1) {
+    if (isPunish) return ["u"];
+    return [Math.random() < 0.38 ? "j" : "u"];
+  }
+  if (isPunish) {
+    if (difficulty.launcher > 0 && Math.random() < Math.max(difficulty.launcher, difficulty.stage >= 5 ? 0.45 : 0.25)) {
+      return difficulty.stage >= 5 ? [...AI_COMBO_ROUTES.punishJuggle] : ["launcher", "k"];
+    }
+    return difficulty.combo >= 3 ? [...AI_COMBO_ROUTES.lightChain] : ["u", "u2"];
+  }
+  const roll = Math.random();
+  if (difficulty.combo >= 3) {
+    if (difficulty.launcher > 0 && roll < difficulty.launcher * 0.7) return [...AI_COMBO_ROUTES.juggleStarter];
+    if (roll < 0.48) return [...AI_COMBO_ROUTES.lightChain];
+    if (roll < 0.78) return [...AI_COMBO_ROUTES.mixupChain];
+    return [...AI_COMBO_ROUTES.lowChain];
+  }
+  if (difficulty.launcher > 0 && roll < difficulty.launcher * 0.55) return ["launcher", "k"];
+  return roll < 0.55 ? ["u", "u2"] : ["j", "k"];
+}
+
+function executeAIMove(ai, step) {
+  if (!step) return false;
+  if (ai.attack) {
+    ai.attack = null;
+    ai.cooldown = 0;
+  }
+  if (step === "l") return useSpecial(ai);
+  if (step === "launcher") {
+    return queueAttack(ai, "launcher", { damage: 10, range: 1.38, windup: 0.17, duration: 0.42, launch: true, limb: "rightPunch" });
+  }
+  if (step === "u-u-i") {
+    return queueAttack(ai, "combo-finisher", { damage: 14, range: 1.5, knockdown: true, duration: 0.4, limb: "rightPunch", comboMove: "straight" });
+  }
+  if (step === "u-i-k") {
+    return queueAttack(ai, "kick", { damage: 13, range: 1.55, knockdown: true, duration: 0.48, limb: "rightKick", comboMove: "roundhouse" });
+  }
+  if (step === "j-k-k") {
+    return queueAttack(ai, "kick", { damage: 13, range: 1.55, knockdown: true, duration: 0.48, limb: "rightKick", comboMove: "heel" });
+  }
+  if (step === "i") {
+    return queueAttack(ai, "punch", { damage: 9, range: 1.24, meterGain: 14, height: "mid", limb: "rightPunch" });
+  }
+  if (step === "u2") {
+    return queueAttack(ai, "punch", { meterGain: 8, height: "high", limb: "rightPunch" });
+  }
+  if (step === "j") {
+    return queueAttack(ai, "kick", { damage: 8, range: 1.4, low: true, duration: 0.36, meterGain: 8, limb: "leftKick" });
+  }
+  if (step === "k") {
+    return queueAttack(ai, "kick", { damage: 8, range: 1.65, duration: 0.42, meterGain: 14, limb: "rightKick" });
+  }
+  return queueAttack(ai, "punch", { meterGain: 8, height: "high", limb: "leftPunch" });
 }
 
 function updateAI(dt) {
   if (!opponent || !player || opponent.health <= 0 || player.health <= 0) return;
   const ai = opponent;
   const difficulty = ai.difficulty;
+  if (!Array.isArray(ai.aiQueue)) ai.aiQueue = [];
   if (ai.airborne || ai.landingTime > 0 || ai.stun > 0 || (ai.recovery || 0) > 0) {
     if ((ai.recovery || 0) > 0) {
       ai.blocking = false;
       ai.guardMode = null;
+      ai.desiredGuardMode = null;
     }
+    ai.aiQueue.length = 0;
     return;
   }
+
   const dx = player.x - ai.x;
   const dz = player.z - ai.z;
   const distance = Math.abs(dx);
   ai.facing = dx >= 0 ? 1 : -1;
   ai.root.scale.x = ai.facing;
   ai.aiTimer -= dt;
+  const rangeBand = classifyAIRange(distance, player.attack);
+  ai.aiRange = rangeBand;
+  const reactionProb = difficulty.reactionSkill ?? difficulty.block ?? 0.25;
 
+  // 1. Frame-reading reaction when P1 enters attack startup
   if (player.attack && ai.observedAttack !== player.attack) {
     ai.observedAttack = player.attack;
     ai.reactionTimer = difficulty.reaction;
-    const comboThreat = difficulty.stage >= 3 && (player.input?.chain.length >= 2 || player.attack.comboMove);
-    ai.defense = attackHeight(player.attack) !== "low" && Math.random() < (comboThreat ? Math.max(0.7, difficulty.block) : difficulty.block) ? "block" :
-      (Math.random() < difficulty.sidestep ? "sidestep" : "none");
-  }
-  if (player.attack && ai.defense && ai.defense !== "none") {
-    ai.reactionTimer -= dt;
-    if (ai.reactionTimer <= 0) {
-      if (ai.defense === "sidestep" && distance < 2.4 && !player.attack.special) {
-        ai.dodgeTimer = 0.42;
-        setAIState("SIDESTEP", 0.35);
-      } else if (ai.defense === "block" && attackHeight(player.attack) !== "low" && !ai.attack && ai.stun <= 0) ai.blockTimer = 0.45;
+    const height = attackHeight(player.attack);
+    const inGuardZone = distance <= Math.max(player.attack.range || 1.6, 1.9);
+    const comboThreat = (player.input?.chain?.length || 0) >= 2 || Boolean(player.attack.comboMove);
+    const blockChance = comboThreat ? Math.max(0.7, reactionProb) : reactionProb;
+
+    if (comboThreat) ai.aiBlockedComboCount = Math.max(ai.aiBlockedComboCount || 0, player.input?.chain?.length || 2);
+    else if (!player.input?.chain?.length) ai.aiBlockedComboCount = 0;
+
+    if (distance < 2.8 && isLinearRightThreat(player.attack) && Math.random() < Math.max(difficulty.sidestep, difficulty.stage >= 2 ? 0.25 : 0.08)) {
+      ai.defense = "sidestep";
+    } else if (inGuardZone && Math.random() < blockChance) {
+      ai.defense = height === "low" ? "block-low" : "block-stand";
+    } else if (distance < 2.4 && height !== "low" && Math.random() < difficulty.sidestep) {
+      ai.defense = "sidestep";
+    } else {
       ai.defense = "none";
     }
   }
 
+  if (player.attack && ai.defense && ai.defense !== "none") {
+    ai.reactionTimer -= dt;
+    if (ai.reactionTimer <= 0) {
+      if (ai.defense === "sidestep" && distance < 2.8 && !player.attack.special) {
+        ai.dodgeTimer = 0.42;
+        ai.ghostTimer = Math.max(ai.ghostTimer || 0, 0.24);
+        ai.aiQueue.length = 0;
+        setAIState("SIDESTEP", 0.35);
+      } else if ((ai.defense === "block-low" || ai.defense === "block-stand") && !ai.attack && ai.stun <= 0) {
+        ai.blockTimer = 0.45;
+        ai.desiredGuardMode = ai.defense === "block-low" ? "low" : "standing";
+        ai.aiGuardComboPending = (player.input?.chain?.length || 0) >= 1 || Boolean(player.attack.comboMove);
+        if (ai.aiGuardComboPending) ai.aiBlockedComboCount = (ai.aiBlockedComboCount || 0) + 1;
+      }
+      ai.defense = "none";
+    }
+  }
+
+  // Wait for P1's 3-hit combo pressure to finish before immediately punishing P1's recovery
+  const holdingForComboEnd = ai.blockTimer > 0 && ai.aiGuardComboPending && (player.attack || (player.input?.chain?.length || 0) > 0);
+  if (ai.aiGuardComboPending && !player.attack && !(player.input?.chain?.length || 0) && distance < 1.85 && difficulty.stage >= 2) {
+    ai.aiGuardComboPending = false;
+    ai.aiBlockedComboCount = 0;
+    ai.blockTimer = 0;
+    ai.desiredGuardMode = null;
+    if (ai.cooldown <= 0 && ai.stun <= 0 && ai.aiState !== "SIDESTEP") {
+      ai.aiCombo = 0;
+      ai.aiQueue = chooseAIComboQueue(ai, { isPunish: true });
+      setAIState("ATTACK", Math.max(0.7, ai.aiQueue.length * 0.42));
+    }
+  }
+
+  // 2. Whiff Punish: if P1 swings and misses (progress > 0.55 or synthetic whiff), dash & counter-combo
   const heavyWhiff = player.attack?.kind === "heavy" || player.attack?.kind === "launcher" ||
     player.attack?.kind === "combo-finisher" || player.attack?.special || player.attack?.knockdown;
-  if ((difficulty.speed > 1 || (difficulty.stage >= 3 && heavyWhiff)) && player.attack?.hit && !player.attack.connected &&
-      distance < 1.8 && ai.cooldown <= 0 && ai.stun <= 0 && ai.aiState !== "SIDESTEP") {
+  if ((difficulty.speed > 1 || (difficulty.stage >= 3 && heavyWhiff) || (difficulty.stage >= 2 && (player.attack?.age || 0) / Math.max(player.attack?.duration || 0.36, 0.001) > 0.55)) &&
+      isPlayerWhiff(player.attack) && distance < 2.6 && ai.cooldown <= 0 && ai.stun <= 0 && ai.aiState !== "SIDESTEP" && !holdingForComboEnd) {
     ai.aiCombo = 0;
     ai.blockTimer = 0;
-    setAIState("ATTACK", difficulty.combo * 0.48);
+    ai.desiredGuardMode = null;
+    const roundCloser = canAICastSpecial(ai) && (player.health <= 32 || (difficulty.special > 0 && Math.random() < difficulty.special));
+    if (roundCloser && distance < 2.6) {
+      ai.aiQueue = ["l"];
+    } else if (!ai.aiQueue.length || ai.aiState !== "ATTACK") {
+      ai.aiQueue = chooseAIComboQueue(ai, { isPunish: true });
+    }
+    if (distance > 1.6) {
+      ai.vx = ai.facing * ai.definition.stats.speed * 0.42;
+    }
+    setAIState("ATTACK", Math.max(0.65, difficulty.combo * 0.48));
   }
 
+  // 3. Air-Juggle conversion whenever P1 is launched into the air
   if (difficulty.combo > 1 && player.y > 0.4 && distance < 3.2) {
-    if (ai.aiState !== "JUGGLE_FOLLOWUP") setAIState("JUGGLE_FOLLOWUP", 0.42);
-  } else if (ai.aiState === "JUGGLE_FOLLOWUP" && ai.aiTimer <= 0) {
-    setAIState("IDLE", 0.4);
+    if (ai.aiState !== "JUGGLE_FOLLOWUP") {
+      if (!ai.aiQueue.length || ai.aiQueue[0] !== "k") ai.aiQueue = ["k", "k"];
+      setAIState("JUGGLE_FOLLOWUP", 0.72);
+    }
+  } else if (ai.aiState === "JUGGLE_FOLLOWUP" && ai.aiTimer <= 0 && player.y < 0.1) {
+    ai.aiQueue.length = 0;
+    setAIState("FOOTSIE", 0.35);
   }
 
+  // 4. Strategic state transitions & execution
   switch (ai.aiState) {
     case "IDLE":
-      if (distance > (difficulty.speed > 1 ? 1.65 : 2.1)) setAIState("APPROACH", 0.8);
-      else if (distance < 1.25 && Math.random() < difficulty.sidestep * dt * 0.5) setAIState("SIDESTEP", 0.32);
-      else if (ai.aiTimer <= 0 && ai.cooldown <= 0) setAIState("ATTACK", difficulty.combo * 0.48 + difficulty.reaction);
+      if (rangeBand === "FAR") setAIState("APPROACH", 0.8);
+      else if (rangeBand === "MID") setAIState("FOOTSIE", random(0.28, 0.46));
+      else if (ai.aiTimer <= 0 && ai.cooldown <= 0) {
+        if (!ai.aiQueue.length) ai.aiQueue = chooseAIComboQueue(ai);
+        setAIState("ATTACK", Math.max(0.6, difficulty.combo * 0.48 + difficulty.reaction));
+      }
       break;
     case "APPROACH":
-      ai.vx = ai.facing * ai.definition.stats.speed * 0.18 * difficulty.speed;
-      if (distance < 1.75) setAIState("ATTACK", difficulty.combo * 0.48 + difficulty.reaction);
+      ai.vx = ai.facing * ai.definition.stats.speed * 0.22 * difficulty.speed;
+      if (distance < 1.65) {
+        if (!ai.aiQueue.length) ai.aiQueue = chooseAIComboQueue(ai);
+        setAIState("ATTACK", Math.max(0.6, difficulty.combo * 0.48 + difficulty.reaction));
+      } else if (rangeBand === "MID" && ai.aiTimer <= 0) {
+        setAIState("FOOTSIE", random(0.26, 0.44));
+      }
       break;
-    case "ATTACK":
-      if (ai.aiCombo < difficulty.combo && ai.cooldown <= 0 && ai.stun <= 0 && !(difficulty.stage >= 3 && ai.blockTimer > 0)) {
-        const missed = player.attack && player.attack.hit && !player.attack.connected && distance < 1.8;
-        if (difficulty.special && canAICastSpecial(ai) && Math.random() < difficulty.special && (missed || ai.aiCombo > 0)) useSpecial(ai);
-        else if (difficulty.launcher && Math.random() < difficulty.launcher && (missed || ai.aiCombo > 0)) {
-          queueAttack(ai, "launcher", { damage: 10, range: 1.38, windup: 0.17, duration: 0.42, launch: true, limb: "rightPunch" });
+    case "FOOTSIE": {
+      const weaveDir = ai.aiFootsieDir || 1;
+      const clampedDir = distance > 2.85 ? 1 : distance < 1.72 ? -1 : weaveDir;
+      ai.vx = ai.facing * clampedDir * ai.definition.stats.speed * 0.16 * difficulty.speed;
+      if (rangeBand === "FAR") {
+        setAIState("APPROACH", 0.75);
+      } else if (distance < 1.6 && ai.cooldown <= 0) {
+        if (!ai.aiQueue.length) ai.aiQueue = chooseAIComboQueue(ai);
+        setAIState("ATTACK", Math.max(0.6, difficulty.combo * 0.48 + difficulty.reaction));
+      } else if (ai.aiTimer <= 0) {
+        if (Math.random() < Math.max(0.22, difficulty.sidestep * 0.55) && distance < 2.6) {
+          setAIState("SIDESTEP", 0.32);
+        } else if (distance < 2.25 && ai.cooldown <= 0 && Math.random() < 0.55) {
+          ai.aiQueue = chooseAIComboQueue(ai);
+          setAIState("ATTACK", Math.max(0.6, difficulty.combo * 0.48));
         } else {
-          queueAttack(ai, ai.aiCombo % 2 === 0 ? "punch" : "kick", { damage: ai.aiCombo % 2 ? 8 : 6, range: 1.45, limb: ai.aiCombo % 2 === 0 ? "leftPunch" : "rightKick" });
+          setAIState("FOOTSIE", random(0.24, 0.4));
         }
-        ai.aiCombo += 1;
-      }
-      if (ai.aiTimer <= 0) {
-        ai.aiCombo = 0;
-        setAIState(distance > 2.2 ? "APPROACH" : "IDLE", random(0.35, 0.75));
       }
       break;
+    }
+    case "ATTACK": {
+      const canChainCurrent = Boolean(ai.attack && !ai.attack.special &&
+        ai.attack.age >= Math.max((ai.attack.windup || 0.08) + 0.025, (ai.attack.duration || 0.33) * 0.4));
+      const canStartNeutral = !ai.attack && ai.cooldown <= 0;
+      const blockedByGuard = difficulty.stage >= 3 && ai.blockTimer > 0;
+
+      // Cancel queued ground combo follow-ups if an attack completely whiffed non-launcher
+      if (ai.attack?.hit && !ai.attack.connected && !ai.attack.launch && player.y <= 0.1) {
+        ai.aiQueue.length = 0;
+      }
+
+      if (ai.stun <= 0 && !blockedByGuard && (canStartNeutral || canChainCurrent)) {
+        if (!ai.aiQueue.length && ai.aiCombo < difficulty.combo) {
+          ai.aiQueue = chooseAIComboQueue(ai);
+        }
+        const missed = isPlayerWhiff(player.attack) && distance < 2.6;
+        // Strategic Super Meter: unleash Signature Special as a whiff punish, round-closer, or combo ender
+        if (canAICastSpecial(ai) && distance <= 2.6 &&
+            ((missed && difficulty.special && Math.random() < difficulty.special) ||
+             (player.health <= 32 && difficulty.special && Math.random() < Math.max(0.6, difficulty.special)) ||
+             (!ai.aiQueue.length && ai.aiCombo > 0 && difficulty.special && Math.random() < difficulty.special * 0.65))) {
+          ai.aiQueue.length = 0;
+          useSpecial(ai);
+          ai.aiCombo += 1;
+        } else if (ai.aiQueue.length) {
+          const nextStep = ai.aiQueue.shift();
+          executeAIMove(ai, nextStep);
+          ai.aiCombo += 1;
+        }
+      }
+
+      if (ai.aiTimer <= 0 && !ai.aiQueue.length) {
+        ai.aiCombo = 0;
+        setAIState(distance > 2.8 ? "APPROACH" : "FOOTSIE", random(0.28, 0.55));
+      }
+      break;
+    }
     case "SIDESTEP":
       if (ai.aiSide === 0) ai.aiSide = Math.random() < 0.5 ? -1 : 1;
       ai.vz = ai.aiSide * 3.8;
-      if (ai.aiTimer <= 0) setAIState("APPROACH", 0.55);
-      break;
-    case "JUGGLE_FOLLOWUP":
-      if (distance > 1.2) ai.vx = ai.facing * ai.definition.stats.speed * 0.2 * difficulty.speed;
-      if (distance < 1.8 && ai.cooldown <= 0 && player.y > 0.25) {
-        queueAttack(ai, "kick", { damage: 6, range: 1.9, windup: 0.1, limb: "rightKick" });
+      if (ai.aiTimer <= 0) {
+        if (distance < 2.2 && ai.cooldown <= 0 && difficulty.stage >= 2) {
+          ai.aiQueue = chooseAIComboQueue(ai, { isPunish: true });
+          setAIState("ATTACK", 0.65);
+        } else {
+          setAIState("FOOTSIE", 0.4);
+        }
       }
-      if (ai.aiTimer <= 0 && player.y < 0.1) setAIState("IDLE", 0.45);
       break;
+    case "JUGGLE_FOLLOWUP": {
+      if (distance > 1.35) ai.vx = ai.facing * ai.definition.stats.speed * 0.22 * difficulty.speed;
+      const canChainAir = Boolean(ai.attack && !ai.attack.special &&
+        ai.attack.age >= Math.max((ai.attack.windup || 0.08) + 0.025, (ai.attack.duration || 0.33) * 0.4));
+      if (distance < 1.95 && player.y > 0.2 && (!ai.attack && ai.cooldown <= 0 || canChainAir)) {
+        const airStep = ai.aiQueue.length ? ai.aiQueue.shift() : "k";
+        executeAIMove(ai, airStep);
+      }
+      if (ai.aiTimer <= 0 && player.y < 0.1) {
+        ai.aiQueue.length = 0;
+        setAIState("FOOTSIE", 0.35);
+      }
+      break;
+    }
     default:
       setAIState("IDLE");
   }
 
   ai.blocking = ai.blockTimer > 0 && !(ai.attack?.special && ai.attack.age < ai.attack.windup);
-  ai.guardMode = ai.blocking ? "standing" : null;
+  ai.guardMode = ai.blocking ? (ai.desiredGuardMode || "standing") : null;
+  if (!ai.blocking) ai.desiredGuardMode = null;
   if (distance > 1.7) ai.vz += clamp(dz, -1, 1) * 0.55;
 }
 
