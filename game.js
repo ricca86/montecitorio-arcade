@@ -6,7 +6,7 @@ import { TournamentManager, VersusManager, difficultyForStage, formatTournamentT
 import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
 import { attackHeight, defenseOutcome, isCounterHit } from "./defense.js";
 import { InputManager, keyboardActions, gamepadActions } from "./input.js";
-import { buildFighterModel, updateGroundedRig, applyKickAnimation, isKickHitboxActive, setSpecialReadyGlow, createFaceTexture } from "./fighter-model.js";
+import { buildFighterModel, updateGroundedRig, applyKickAnimation, isKickHitboxActive, setSpecialReadyGlow, createFaceTexture, computeAirborneModelOffset } from "./fighter-model.js";
 import { createArena } from "./arena.js";
 import { createAtmosphereRig, createDynamicCamera } from "./atmosphere.js";
 import {
@@ -1200,14 +1200,15 @@ function spawnImpact(point, { launch = false, counter = false, special = false, 
 function contactPoint(attacker, target, attack) {
   const kick = attack.limb === "leftKick" || attack.limb === "rightKick";
   if (target.airborne || target.landingTime > 0) {
-    return new THREE.Vector3(target.x - target.facing * 0.55, target.y + 0.5, target.z);
+    return new THREE.Vector3(target.x, target.y + (target.airborne ? 0.95 : 0.45), target.z);
   }
   const heightScale = target.definition?.height || 1;
   let contactHeight = 1.4;
   if (kick) {
-    if (attack.limb === "leftKick") contactHeight = 1.52 * heightScale;
+    if (attack.low) contactHeight = 0.68 * heightScale;
+    else if (attack.limb === "leftKick") contactHeight = 1.52 * heightScale;
     else if (attack.comboMove === "heel" || attack.comboMove === "roundhouse") contactHeight = 1.38 * heightScale;
-    else contactHeight = 1.18 * heightScale;
+    else contactHeight = 1.24 * heightScale;
   }
   return new THREE.Vector3(
     target.x - attacker.facing * 0.28,
@@ -2161,30 +2162,39 @@ function poseFighter(combatant, dt, opponentBody = null) {
   const { joints, definition, attack } = combatant;
   const movement = clamp(Math.hypot(combatant.vx, combatant.vz) / 2.5, 0, 1);
   combatant.animationTime += dt;
-  combatant.walkPhase += dt * (3 + movement * 6);
+  combatant.walkPhase += dt * (3 + movement * 7.2);
   const step = Math.sin(combatant.walkPhase) * movement;
+  const walkSign = combatant.vx * combatant.facing < -0.15 ? -1 : 1;
+  const stride = step * walkSign;
   const bounce = Math.sin(combatant.animationTime * 6.5);
-  const wide = definition.id === "renzi" ? 0.34 : definition.id === "schlein" ? 0.27 : 0.2;
-  const guard = combatant.blocking ? 0.3 : 0;
+  const wide = definition.id === "renzi" ? 0.30 : definition.id === "schlein" ? 0.24 : 0.18;
+  const guard = combatant.blocking ? 0.32 : 0;
   const sidestep = combatant.dodgeTimer > 0 && Math.abs(combatant.vz) > 0.3 && !combatant.airborne;
   const side = sidestep ? Math.sign(combatant.vz) : 0;
-  const baseKnee = 0.14 + (bounce + 1) * 0.06;
-  const leftKneeBend = baseKnee + Math.max(0, -step) * 0.42;
-  const rightKneeBend = baseKnee + Math.max(0, step) * 0.42;
+  const baseKnee = 0.22 + (bounce + 1) * 0.055;
+  const leftKneeBend = baseKnee + Math.max(0, -stride) * 0.48;
+  const rightKneeBend = baseKnee + 0.04 + Math.max(0, stride) * 0.48;
 
-  joints.hips.rotation.set(0, 0, step * 0.05 + bounce * 0.035);
-  joints.torso.rotation.set(0, -0.1, (definition.id === "schlein" ? -0.12 : -0.06) + bounce * 0.025);
+  // Authentic 3/4 Tekken fighting stance: angled toward opponent (+X) while open to camera (+Z)
+  const stanceYaw = 0.52;
+  joints.hips.rotation.set(0, stanceYaw + stride * 0.14, stride * 0.04 + bounce * 0.025);
+  joints.torso.rotation.set(0, -0.10 - stride * 0.08, (definition.id === "schlein" ? -0.10 : -0.05) + bounce * 0.02);
   const breath = Math.sin(combatant.animationTime * 2.4);
   joints.torso.scale.set(1 + breath * 0.012, 1 + breath * 0.006, 1 + breath * 0.018);
   joints.head.rotation.set(0, 0.1, 0.04 - bounce * 0.02);
-  joints.leftShoulder.rotation.set(-0.2, 0, 0.8 + guard + bounce * 0.06);
-  joints.rightShoulder.rotation.set(-0.2, 0, 1.05 + guard - bounce * 0.06);
-  joints.leftElbow.rotation.set(-0.2, 0, 1.5 + guard + bounce * 0.08);
-  joints.rightElbow.rotation.set(-0.2, 0, 1.2 + guard - bounce * 0.08);
-  joints.leftHip.rotation.set(-leftKneeBend * 0.48 + step * 0.2, 0, -wide + step * 0.24 + bounce * 0.04);
-  joints.rightHip.rotation.set(-rightKneeBend * 0.48 - step * 0.2, 0, wide - step * 0.24 - bounce * 0.04);
-  joints.leftKnee.rotation.set(leftKneeBend, 0, 0.16);
-  joints.rightKnee.rotation.set(rightKneeBend, 0, -0.16);
+
+  // Compact boxing guard aligned along +X (elbows tucked near ribs, fists up guarding chin)
+  const armAlignY = -(stanceYaw - 0.10);
+  joints.leftShoulder.rotation.set(-0.24, armAlignY - 0.10 + stride * 0.14, 0.34 + guard + bounce * 0.05);
+  joints.rightShoulder.rotation.set(-0.28, armAlignY + 0.05 - stride * 0.14, 0.36 + guard - bounce * 0.05);
+  joints.leftElbow.rotation.set(-0.22, 0, 1.90 + guard + bounce * 0.06);
+  joints.rightElbow.rotation.set(-0.18, 0, 1.95 + guard - bounce * 0.06);
+
+  // Sagittal martial-arts footwork along the combat axis with clean hinge knees (knee.z = 0)
+  joints.leftHip.rotation.set(0.24 - leftKneeBend * 0.48 + stride * 0.36, -0.18, -0.06 - wide * 0.32);
+  joints.rightHip.rotation.set(-0.30 - rightKneeBend * 0.48 - stride * 0.36, 0.24, 0.06 + wide * 0.32);
+  joints.leftKnee.rotation.set(leftKneeBend, 0, 0);
+  joints.rightKnee.rotation.set(rightKneeBend, 0, 0);
   if (joints.leftAnkle) joints.leftAnkle.rotation.set(0, 0, 0);
   if (joints.rightAnkle) joints.rightAnkle.rotation.set(0, 0, 0);
   combatant.model.position.set(0, 0, 0);
@@ -2199,8 +2209,9 @@ function poseFighter(combatant, dt, opponentBody = null) {
     joints.rightHip.rotation.x -= 0.38;
     joints.leftKnee.rotation.x += 0.75;
     joints.rightKnee.rotation.x += 0.75;
-    joints.torso.rotation.z -= 0.2;
+    joints.torso.rotation.z -= 0.18;
   } else if (combatant.parryPose > 0) {
+    joints.leftShoulder.rotation.y = -0.35;
     joints.leftShoulder.rotation.z = 1.9;
     joints.leftElbow.rotation.z = 0.45;
     joints.torso.rotation.y = 0.35;
@@ -2231,27 +2242,45 @@ function poseFighter(combatant, dt, opponentBody = null) {
     const isKickLimb = attack.limb === "leftKick" || attack.limb === "rightKick";
     if (!isKickLimb) {
       joints.torso.rotation.y -= crouch * 0.32;
-      joints.hips.rotation.y += crouch * 0.22;
+      joints.hips.rotation.y += crouch * 0.18;
       joints.leftKnee.rotation.x += crouch * 0.25 + strike * 0.08;
-      joints.rightKnee.rotation.x += crouch * 0.12 + strike * 0.3;
-      combatant.model.position.x += strike * 0.13 - crouch * 0.1;
+      joints.rightKnee.rotation.x += crouch * 0.12 + strike * 0.26;
+      combatant.model.position.x += strike * 0.15 - crouch * 0.1;
     }
-    const punch = (side, angle = 1.45, amount = strike) => {
-      const shoulder = side === "left" ? joints.leftShoulder : joints.rightShoulder;
-      const elbow = side === "left" ? joints.leftElbow : joints.rightElbow;
-      shoulder.rotation.z = THREE.MathUtils.lerp(shoulder.rotation.z - crouch * 0.4, angle, amount);
-      shoulder.rotation.x = THREE.MathUtils.lerp(shoulder.rotation.x, -0.05, amount);
-      elbow.rotation.z = THREE.MathUtils.lerp(elbow.rotation.z + crouch * 0.35, 0.08, amount);
-      joints.hips.rotation.y = crouch * 0.22 + amount * 0.25;
-      joints.torso.rotation.y = -0.1 - crouch * 0.32 + amount * 0.65;
+    const punch = (punchSide, angle = 1.48, amount = strike) => {
+      const isLeft = punchSide === "left";
+      const shoulder = isLeft ? joints.leftShoulder : joints.rightShoulder;
+      const elbow = isLeft ? joints.leftElbow : joints.rightElbow;
+      const offShoulder = isLeft ? joints.rightShoulder : joints.leftShoulder;
+      const offElbow = isLeft ? joints.rightElbow : joints.leftElbow;
+      const hipDrive = isLeft ? 0.32 : 0.18;
+      const torsoDrive = isLeft ? 0.52 : 0.30;
+      joints.hips.rotation.y = stanceYaw - crouch * 0.16 + amount * hipDrive;
+      joints.torso.rotation.y = -0.10 - crouch * 0.30 + amount * torsoDrive;
       joints.torso.rotation.z -= amount * 0.12;
+      // Counter-rotate shoulder yaw so the fist drives dead-straight along +X into the opponent!
+      const punchAlignY = -(joints.hips.rotation.y + joints.torso.rotation.y);
+      shoulder.rotation.y = THREE.MathUtils.lerp(shoulder.rotation.y, punchAlignY, amount);
+      shoulder.rotation.z = THREE.MathUtils.lerp(shoulder.rotation.z - crouch * 0.35, angle, amount);
+      shoulder.rotation.x = THREE.MathUtils.lerp(shoulder.rotation.x, -0.04, amount);
+      elbow.rotation.z = THREE.MathUtils.lerp(elbow.rotation.z + crouch * 0.30, 0.08, amount);
+      elbow.rotation.x = THREE.MathUtils.lerp(elbow.rotation.x, -0.04, amount);
+      // Pull off-hand tightly back to guard the chin
+      offShoulder.rotation.y = THREE.MathUtils.lerp(offShoulder.rotation.y, punchAlignY * 0.65, amount);
+      offShoulder.rotation.z = THREE.MathUtils.lerp(offShoulder.rotation.z, 0.52, amount);
+      offElbow.rotation.z = THREE.MathUtils.lerp(offElbow.rotation.z, 1.92, amount);
     };
 
     const uppercut = attack.kind === "launcher" || (attack.special && definition.id === "meloni");
     if (attack.limb === "leftPunch") punch("left");
     else if (attack.limb === "rightPunch" && !uppercut) punch("right");
     else if (attack.limb === "leftKick") {
-      applyKickAnimation(joints, { style: "roundhouse", side: "left", progress });
+      applyKickAnimation(joints, {
+        style: "roundhouse",
+        side: "left",
+        progress,
+        height: attack.low ? "low" : "high"
+      });
       handledKick = true;
     } else if (attack.limb === "rightKick") {
       const style = (attack.comboMove === "heel" || attack.comboMove === "roundhouse")
@@ -2355,8 +2384,37 @@ function poseFighter(combatant, dt, opponentBody = null) {
     joints.torso.rotation.z -= clamp(combatant.recovery / SPECIAL_FRAME_DATA.whiffRecoverySeconds, 0, 1) * 0.22;
   }
   joints.head.rotation.z += recoil * 0.2;
+  const tumbleBlend = combatant.airborne
+    ? 1
+    : combatant.landingTime > 0
+      ? clamp(Math.abs(Math.sin(combatant.airRotation)), 0, 1)
+      : 0;
+  if (tumbleBlend > 0.01) {
+    // Tuck limbs closer to the torso during airborne tumble / grounded knockdown so nothing juts into the floor
+    joints.torso.rotation.z = THREE.MathUtils.lerp(joints.torso.rotation.z, 0.08, tumbleBlend);
+    joints.leftShoulder.rotation.z = THREE.MathUtils.lerp(joints.leftShoulder.rotation.z, 0.22, tumbleBlend);
+    joints.rightShoulder.rotation.z = THREE.MathUtils.lerp(joints.rightShoulder.rotation.z, -0.12, tumbleBlend);
+    joints.leftElbow.rotation.z = THREE.MathUtils.lerp(joints.leftElbow.rotation.z, 0.42, tumbleBlend);
+    joints.rightElbow.rotation.z = THREE.MathUtils.lerp(joints.rightElbow.rotation.z, 0.38, tumbleBlend);
+    joints.leftHip.rotation.z = THREE.MathUtils.lerp(joints.leftHip.rotation.z, -0.08, tumbleBlend);
+    joints.rightHip.rotation.z = THREE.MathUtils.lerp(joints.rightHip.rotation.z, 0.08, tumbleBlend);
+    joints.leftKnee.rotation.x = THREE.MathUtils.lerp(joints.leftKnee.rotation.x, 0.32, tumbleBlend);
+    joints.rightKnee.rotation.x = THREE.MathUtils.lerp(joints.rightKnee.rotation.x, 0.28, tumbleBlend);
+  }
   combatant.model.rotation.z = combatant.airRotation;
-  combatant.model.position.y += Math.abs(Math.sin(combatant.airRotation)) * 0.38 * definition.height;
+  if (Math.abs(combatant.airRotation) > 1e-5) {
+    const offset = typeof computeAirborneModelOffset === "function"
+      ? computeAirborneModelOffset(combatant.airRotation, definition.height)
+      : (() => {
+          const h = definition.height || 1;
+          const c = Math.cos(combatant.airRotation);
+          const s = Math.sin(combatant.airRotation);
+          const minY = h * (Math.min(-0.50 * s, 0.56 * s) + Math.min((0.11 / h) * c, 2.56 * c));
+          return { x: 1.18 * h * s, y: Math.max(0, 0.11 - minY) };
+        })();
+    combatant.model.position.x += offset.x;
+    combatant.model.position.y += offset.y;
+  }
   if (opponentBody) {
     const target = typeof _headTargetVec !== "undefined" ? _headTargetVec : new THREE.Vector3();
     opponentBody.joints.head.getWorldPosition(target);
@@ -2441,6 +2499,7 @@ function updateCombatant(combatant, dt, opponentBody) {
       combatant.airborne = false;
       combatant.juggle = null;
       combatant.airRotation = Math.atan2(Math.sin(combatant.airRotation), Math.cos(combatant.airRotation));
+      combatant.landingTargetRotation = combatant.airRotation < -Math.PI / 2 ? -Math.PI / 2 : Math.PI / 2;
       combatant.landingTime = 0.55;
       combatant.stun = Math.max(combatant.stun, 0.55);
       shake = Math.max(shake, 0.18);
@@ -2454,11 +2513,12 @@ function updateCombatant(combatant, dt, opponentBody) {
     combatant.airRotation += 7 * dt;
   } else if (combatant.landingTime > 0) {
     combatant.landingTime = Math.max(0, combatant.landingTime - dt);
-    const targetRotation = combatant.landingTime < 0.25 ? 0 : Math.PI / 2;
+    const targetRotation = combatant.landingTime < 0.25 ? 0 : (combatant.landingTargetRotation ?? Math.PI / 2);
     const delta = Math.atan2(Math.sin(targetRotation - combatant.airRotation), Math.cos(targetRotation - combatant.airRotation));
     combatant.airRotation += delta * (1 - Math.exp(-12 * dt));
     combatant.airRotation = Math.atan2(Math.sin(combatant.airRotation), Math.cos(combatant.airRotation));
   } else {
+    combatant.landingTargetRotation = null;
     combatant.airRotation *= Math.exp(-12 * dt);
   }
   if (combatant.hitCombo && !combatant.airborne && combatant.landingTime <= 0 && combatant.stun <= 0) {
@@ -2643,14 +2703,24 @@ function updateVictory(dt) {
   loser.airRotation += fall * settle;
   loser.airRotation = Math.atan2(Math.sin(loser.airRotation), Math.cos(loser.airRotation));
   loser.model.rotation.z = loser.airRotation;
-  loser.model.position.y = Math.abs(Math.sin(loser.airRotation)) * 0.38 * loser.definition.height;
+  const loserOffset = typeof computeAirborneModelOffset === "function"
+    ? computeAirborneModelOffset(loser.airRotation, loser.definition.height, { minXLocal: -0.34, maxXLocal: 0.42 })
+    : (() => {
+        const h = loser.definition.height || 1;
+        const c = Math.cos(loser.airRotation);
+        const s = Math.sin(loser.airRotation);
+        const minY = h * (Math.min(-0.34 * s, 0.42 * s) + Math.min((0.11 / h) * c, 2.56 * c));
+        return { x: 1.18 * h * s, y: Math.max(0, 0.11 - minY) };
+      })();
+  loser.model.position.x = loserOffset.x;
+  loser.model.position.y = loserOffset.y;
   loser.joints.hips.rotation.z = THREE.MathUtils.lerp(loser.joints.hips.rotation.z, 0, settle);
   loser.joints.torso.rotation.y = THREE.MathUtils.lerp(loser.joints.torso.rotation.y, Math.PI / 2, settle);
   loser.joints.torso.rotation.z = THREE.MathUtils.lerp(loser.joints.torso.rotation.z, 0, settle);
-  loser.joints.leftShoulder.rotation.z = THREE.MathUtils.lerp(loser.joints.leftShoulder.rotation.z, 1, settle);
-  loser.joints.leftElbow.rotation.z = THREE.MathUtils.lerp(loser.joints.leftElbow.rotation.z, -0.4, settle);
-  loser.joints.rightShoulder.rotation.z = THREE.MathUtils.lerp(loser.joints.rightShoulder.rotation.z, -1, settle);
-  loser.joints.rightElbow.rotation.z = THREE.MathUtils.lerp(loser.joints.rightElbow.rotation.z, 0.4, settle);
+  loser.joints.leftShoulder.rotation.z = THREE.MathUtils.lerp(loser.joints.leftShoulder.rotation.z, 0.45, settle);
+  loser.joints.leftElbow.rotation.z = THREE.MathUtils.lerp(loser.joints.leftElbow.rotation.z, 0.25, settle);
+  loser.joints.rightShoulder.rotation.z = THREE.MathUtils.lerp(loser.joints.rightShoulder.rotation.z, -0.45, settle);
+  loser.joints.rightElbow.rotation.z = THREE.MathUtils.lerp(loser.joints.rightElbow.rotation.z, 0.25, settle);
   for (const joint of [loser.joints.leftHip, loser.joints.rightHip, loser.joints.leftKnee, loser.joints.rightKnee]) {
     joint.rotation.x = THREE.MathUtils.lerp(joint.rotation.x, 0, settle);
     joint.rotation.z = THREE.MathUtils.lerp(joint.rotation.z, 0, settle);

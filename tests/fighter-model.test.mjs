@@ -12,7 +12,9 @@ import {
   updateGroundedRig,
   evaluateKickCurve,
   applyKickAnimation,
-  isKickHitboxActive
+  isKickHitboxActive,
+  computeAirborneModelOffset,
+  getTrouserColor
 } from "../fighter-model.js";
 
 test("createSculptedLimb sculpts vertices and applies Gouraud vertex colors", () => {
@@ -297,6 +299,7 @@ function createGamePoseContext() {
     SPECIAL_FRAME_DATA,
     updateGroundedRig,
     applyKickAnimation,
+    computeAirborneModelOffset,
     tryHit() {},
     advanceInputClock() {},
     clearComboInput() {},
@@ -523,4 +526,138 @@ test("all signatures have distinct windup, impact and recovery poses", () => {
     impactPoses.add(JSON.stringify(impact));
   }
   assert.equal(impactPoses.size, fighters.length);
+});
+
+test("hit, knocked down, and upside-down tumbling fighters never disappear under the stage floor", () => {
+  const ctx = createGamePoseContext();
+  const stageTopY = 0.11;
+
+  // Standing upright produces zero airborne offset
+  assert.deepEqual(computeAirborneModelOffset(0, 1.0), { x: 0, y: 0 });
+
+  const measureBodyMinY = (body) => {
+    const propSet = new Set();
+    body.prop.traverse((o) => propSet.add(o));
+    let minY = Infinity;
+    body.model.traverse((o) => {
+      if (!o.isMesh || propSet.has(o)) return;
+      const b = new THREE.Box3().setFromObject(o);
+      if (b.min.y < minY) minY = b.min.y;
+    });
+    return minY;
+  };
+
+  // Check every fighter across the full 360-degree tumble arc at y = 0 (worst-case floor contact)
+  const testAngles = [
+    -Math.PI, -Math.PI * 0.75, -Math.PI / 2, -Math.PI / 4,
+    0, Math.PI / 4, Math.PI / 2, Math.PI * 0.75, Math.PI
+  ];
+  for (const definition of fighters) {
+    const body = makePoseCombatant(definition, 1);
+    for (const angle of testAngles) {
+      body.airborne = angle !== 0;
+      body.airRotation = angle;
+      body.reactionTime = 0.3;
+      body.root.position.set(0, 0, 0);
+      ctx.poseFighter(body, 0);
+      body.root.updateMatrixWorld(true);
+      const minY = measureBodyMinY(body);
+      assert.ok(
+        minY >= stageTopY - 0.05,
+        `${definition.id} clipped under floor at angle=${angle.toFixed(2)}: min.y=${minY.toFixed(3)}`
+      );
+    }
+  }
+
+  // Full knockdown (vy = 2.2) & launcher (vy = 5.1) simulations must stay above the floor every frame
+  for (const vy of [2.2, 5.1]) {
+    const body = Object.assign(makePoseCombatant(fighters[4], -1), {
+      x: 1, y: 0, z: 0, vx: 3.5, vy, vz: 0, cooldown: 0, stun: 0.3,
+      dodgeTimer: 0, blockTimer: 0, isPlayer: false, facing: -1, airborne: true, reactionTime: 0.3
+    });
+    for (let step = 0; step < 90; step += 1) {
+      ctx.updateCombatant(body, 0.02, null);
+      body.root.updateMatrixWorld(true);
+      const minY = measureBodyMinY(body);
+      assert.ok(
+        minY >= stageTopY - 0.05,
+        `vy=${vy} step=${step} airRot=${body.airRotation.toFixed(2)} clipped under floor: min.y=${minY.toFixed(3)}`
+      );
+    }
+  }
+});
+
+test("upgraded low-poly PS1 characters have coordinated trousers and distinct outfit silhouettes", () => {
+  const trouserColors = new Set(fighters.map((f) => getTrouserColor(f)));
+  assert.ok(trouserColors.size >= 6, "fighters should wear coordinated trousers instead of one generic color");
+
+  const salvini = buildFighterModel(fighters.find((f) => f.id === "salvini"), 1);
+  // Salvini's head includes skull, 2 ears, 3D beard, tailored glasses group, and hairPivot
+  const salviniHeadGroup = salvini.joints.head.children[0];
+  assert.ok(salviniHeadGroup.children.length >= 6, "Salvini head should include sculpted beard and tailored glasses");
+});
+
+test("all kicks and punches drive accurately along +X toward the opponent with clean hinge knees", () => {
+  const ctx = createGamePoseContext();
+  const body = makePoseCombatant(fighters[0], 1);
+  const worldPos = (obj) => {
+    body.root.updateMatrixWorld(true);
+    return obj.getWorldPosition(new THREE.Vector3());
+  };
+
+  // Idle 3/4 stance: knees have zero sideways bow, right lead foot ahead of left rear foot, compact guard
+  ctx.poseFighter(body, 0);
+  assert.equal(body.joints.leftKnee.rotation.z, 0);
+  assert.equal(body.joints.rightKnee.rotation.z, 0);
+  assert.ok(worldPos(body.joints.rightAnkle).x > worldPos(body.joints.leftAnkle).x + 0.3, "lead foot should sit ahead of rear foot");
+  assert.ok(worldPos(body.rightHand).x < 0.72, "guard hand should stay compact near chest/chin");
+
+  // Left & Right Punches extend straight toward opponent (+X) with minimal Z drift
+  for (const [limb, hand] of [["leftPunch", body.leftHand], ["rightPunch", body.rightHand]]) {
+    body.attack = { kind: "punch", limb, windup: 0.08, duration: 0.33, age: 0.08 };
+    ctx.poseFighter(body, 0);
+    const pt = worldPos(hand);
+    assert.ok(pt.x >= 0.80, `${limb} should reach toward opponent (+X), got x=${pt.x.toFixed(2)}`);
+    assert.ok(Math.abs(pt.z) <= 0.30, `${limb} should stay aligned with opponent line (|z|<=0.30), got z=${pt.z.toFixed(2)}`);
+  }
+
+  // KICK_L high roundhouse snaps straight at opponent head height along +X (not behind into -Z!)
+  body.attack = { kind: "kick", limb: "leftKick", duration: 0.38, windup: 0.114, age: 0.38 * 0.42 };
+  ctx.poseFighter(body, 0);
+  const highKickFoot = worldPos(body.joints.leftAnkle);
+  assert.ok(highKickFoot.x >= 0.95, `high roundhouse must extend toward opponent (+X), got x=${highKickFoot.x.toFixed(2)}`);
+  assert.ok(highKickFoot.y >= 1.32, `high roundhouse must reach upper-chest/head height, got y=${highKickFoot.y.toFixed(2)}`);
+  assert.ok(Math.abs(highKickFoot.z) <= 0.25, `high roundhouse must not swing off-axis, got z=${highKickFoot.z.toFixed(2)}`);
+
+  // KICK_L low kick sweeps low at knee/shin height along +X
+  body.attack = { kind: "kick", limb: "leftKick", low: true, duration: 0.36, windup: 0.108, age: 0.36 * 0.42 };
+  ctx.poseFighter(body, 0);
+  const lowKickFoot = worldPos(body.joints.leftAnkle);
+  assert.ok(lowKickFoot.x >= 0.85, `low kick must reach opponent (+X), got x=${lowKickFoot.x.toFixed(2)}`);
+  assert.ok(lowKickFoot.y <= 0.80, `low kick must strike low, got y=${lowKickFoot.y.toFixed(2)}`);
+  assert.ok(Math.abs(lowKickFoot.z) <= 0.25, `low kick must stay on combat line, got z=${lowKickFoot.z.toFixed(2)}`);
+
+  // KICK_R side kick chambers tucked back then thrusts piston-straight along +X with zero camera drift
+  body.attack = { kind: "kick", limb: "rightKick", duration: 0.42, windup: 0.126, age: 0.42 * 0.28 };
+  ctx.poseFighter(body, 0);
+  const sideChamberKnee = worldPos(body.joints.rightKnee);
+  const sideChamberFoot = worldPos(body.joints.rightAnkle);
+  assert.ok(sideChamberFoot.x <= sideChamberKnee.x + 0.08, "side kick chamber should tuck foot back under knee");
+
+  body.attack.age = 0.42 * 0.42;
+  ctx.poseFighter(body, 0);
+  const sideExtendFoot = worldPos(body.joints.rightAnkle);
+  assert.ok(sideExtendFoot.x >= 1.10, `side kick must drive far along +X, got x=${sideExtendFoot.x.toFixed(2)}`);
+  assert.ok(Math.abs(sideExtendFoot.z) <= 0.18, `side kick must stay dead-straight on combat line, got z=${sideExtendFoot.z.toFixed(2)}`);
+
+  // Axe finisher lifts overhead then chops straight downward along +X (not backwards!)
+  body.attack = { kind: "kick", limb: "rightKick", comboMove: "heel", duration: 0.48, windup: 0.144, age: 0.48 * 0.42 };
+  ctx.poseFighter(body, 0);
+  const axePeak = worldPos(body.joints.rightAnkle);
+  body.attack.age = 0.48 * 0.60;
+  ctx.poseFighter(body, 0);
+  const axeChop = worldPos(body.joints.rightAnkle);
+  assert.ok(axePeak.x >= 0.75 && axePeak.y >= 2.1, `axe kick apex should rise overhead toward +X, got (${axePeak.x.toFixed(2)}, ${axePeak.y.toFixed(2)})`);
+  assert.ok(axeChop.x >= 1.00 && axeChop.y < axePeak.y - 0.55, `axe kick should chop downward into opponent, got (${axeChop.x.toFixed(2)}, ${axeChop.y.toFixed(2)})`);
+  assert.ok(Math.abs(axeChop.z) <= 0.25, `axe kick chop should stay aligned along +X, got z=${axeChop.z.toFixed(2)}`);
 });
