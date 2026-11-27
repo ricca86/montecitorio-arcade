@@ -5,7 +5,7 @@ import { getWinQuote, startQuoteTypewriter } from "./win-quotes.js";
 import { TournamentManager, VersusManager, difficultyForStage, formatTournamentTime } from "./tournament.js";
 import { createComboInput, bufferInput, advanceInputClock, resolveComboInput, endComboAttack, clearComboInput } from "./combo.js";
 import { attackHeight, defenseOutcome, isCounterHit } from "./defense.js";
-import { InputState, InputManager, keyboardActions, p2KeyboardActions, gamepadActions } from "./input.js";
+import { InputManager, keyboardActions, gamepadActions } from "./input.js";
 import { buildFighterModel, updateGroundedRig, applyKickAnimation, isKickHitboxActive, setSpecialReadyGlow, createFaceTexture } from "./fighter-model.js";
 import { createArena } from "./arena.js";
 import { createAtmosphereRig, createDynamicCamera } from "./atmosphere.js";
@@ -64,6 +64,37 @@ const opponentOrbsNode = document.querySelector("#opponent-orbs");
 const touchSpecialButton = document.querySelector(".touch-special");
 const vsFlashNode = document.querySelector("#vs-flash");
 const timerNode = document.querySelector("#timer");
+const hudNode = document.querySelector("#hud");
+const playerPercentNode = document.querySelector("#player-percent");
+const opponentPercentNode = document.querySelector("#opponent-percent");
+const roundStatusNode = document.querySelector("#round-status");
+const editionNode = document.querySelector(".edition");
+const versusMoodRow = document.querySelector("#versus-mood-row");
+const versusDetailGrid = document.querySelector("#versus-detail-grid");
+const arcadeRecordNode = document.querySelector("#arcade-record");
+const pauseVersusCombos = document.querySelector("#pause-versus-combos");
+const engineErrorNode = document.querySelector("#engine-error");
+
+const PREFS_KEY = "montecitorio_arcade_prefs_v1";
+function readPrefs() {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(PREFS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+function writePrefs(patch) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    const next = { ...readPrefs(), ...patch };
+    localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore storage quota or private-mode errors
+  }
+}
+const savedPrefs = readPrefs();
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color("#2b1e33");
@@ -73,7 +104,13 @@ const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 80);
 camera.position.set(0, 7.4, 17.4);
 camera.lookAt(0, 1.5, -0.5);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+} catch (err) {
+  if (engineErrorNode) engineErrorNode.classList.remove("hidden");
+  throw err;
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -81,6 +118,13 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 mount.appendChild(renderer.domElement);
+renderer.domElement.addEventListener?.("webglcontextlost", (event) => {
+  event.preventDefault();
+  if (matchActive) setPaused(true);
+});
+renderer.domElement.addEventListener?.("webglcontextrestored", () => {
+  resize();
+});
 
 const atmosphere = createAtmosphereRig(scene, renderer);
 const ambientLight = atmosphere.rig.hemiLight;
@@ -99,9 +143,24 @@ const lastTap = { up: 0, down: 0 };
 const p2LastTap = { up: 0, down: 0 };
 const touchPointers = new Map();
 const gamepadPrevious = new Map();
-let touchEnabled = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+let touchEnabled = typeof savedPrefs.touchEnabled === "boolean"
+  ? savedPrefs.touchEnabled
+  : ("ontouchstart" in window || navigator.maxTouchPoints > 0);
 const fightersInMatch = [];
 const ballots = [];
+const ballotGeometry = new THREE.PlaneGeometry(0.28, 0.19);
+const ballotMaterialCache = new Map();
+function getBallotMaterial(color) {
+  let mat = ballotMaterialCache.get(color);
+  if (!mat) {
+    mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
+    ballotMaterialCache.set(color, mat);
+  }
+  return mat;
+}
+const _upVec = new THREE.Vector3(0, 1, 0);
+const _sparkDirVec = new THREE.Vector3();
+const _headTargetVec = new THREE.Vector3();
 const particles = [];
 const impactEffects = [];
 const sidestepGhosts = [];
@@ -143,8 +202,11 @@ const lensFlareTexture = createLensFlareTexture();
 let selectedId = null;
 let p2SelectedId = fighters[1].id;
 let gameMode = "arcade";
+let versusStageMood = 0;
 let p1Locked = false;
 let p2Locked = false;
+let resultShownAt = 0;
+let activeVictoryQuoteText = "";
 let player = null;
 let opponent = null;
 let tournament = null;
@@ -275,20 +337,43 @@ function updateSelectDisplay() {
       : `0${p1Index + 1} / 08`;
   }
   const detailLabel = document.querySelector(".detail-label");
+  const detailStats = document.querySelector("#detail-stats");
   if (gameMode === "versus") {
     if (detailLabel) detailLabel.textContent = "LOCAL 2P MATCHUP";
     document.querySelector("#detail-name").textContent = `${p1Fighter.name} vs ${p2Fighter.name}`;
     document.querySelector("#detail-move").textContent =
-      `1P: ${p1Locked ? "READY!" : "A/D + U/Space"} · 2P: ${p2Locked ? "READY!" : "Arrows + Numpad 1/Enter"}`;
+      `1P: ${p1Locked ? "READY!" : "A/D + F/Space (or click again)"} · 2P: ${p2Locked ? "READY!" : "Arrows + J/Enter"}`;
+    if (detailStats) detailStats.classList.add("hidden");
+    if (versusDetailGrid) {
+      versusDetailGrid.classList.remove("hidden");
+      versusDetailGrid.innerHTML =
+        `<div class="versus-detail-card"><header><span>1P · ${p1Fighter.name}</span><span>${p1Locked ? "OK" : "..."}</span></header>` +
+        `<span class="versus-special">[R] ${p1Fighter.special}</span>` +
+        `${statRowMarkup("SPEED", p1Fighter.stats.speed)}${statRowMarkup("POWER", p1Fighter.stats.power)}${statRowMarkup("RHETORIC", p1Fighter.stats.range)}</div>` +
+        `<div class="versus-detail-card p2-card"><header><span>2P · ${p2Fighter.name}</span><span>${p2Locked ? "OK" : "..."}</span></header>` +
+        `<span class="versus-special">[L/N6] ${p2Fighter.special}</span>` +
+        `${statRowMarkup("SPEED", p2Fighter.stats.speed)}${statRowMarkup("POWER", p2Fighter.stats.power)}${statRowMarkup("RHETORIC", p2Fighter.stats.range)}</div>`;
+    }
   } else {
     if (detailLabel) detailLabel.textContent = "YOUR CANDIDATE";
     document.querySelector("#detail-name").textContent = p1Fighter.name;
     document.querySelector("#detail-move").textContent = `Signature move: ${p1Fighter.special}`;
+    if (versusDetailGrid) versusDetailGrid.classList.add("hidden");
+    if (detailStats) {
+      detailStats.classList.remove("hidden");
+      detailStats.innerHTML =
+        `${statRowMarkup("SPEED", p1Fighter.stats.speed)}${statRowMarkup("POWER", p1Fighter.stats.power)}${statRowMarkup("RHETORIC", p1Fighter.stats.range)}`;
+    }
   }
-  const detailStats = document.querySelector("#detail-stats");
-  if (detailStats) {
-    detailStats.innerHTML =
-      `${statRowMarkup("SPEED", p1Fighter.stats.speed)}${statRowMarkup("POWER", p1Fighter.stats.power)}${statRowMarkup("RHETORIC", p1Fighter.stats.range)}`;
+  if (arcadeRecordNode) {
+    const prefs = readPrefs();
+    if (gameMode === "arcade" && prefs.bestScore > 0) {
+      const timeLabel = prefs.bestTimeMs ? ` · BEST TIME ${formatTournamentTime(prefs.bestTimeMs)}` : "";
+      arcadeRecordNode.textContent = `CHAMBER RECORD · HIGH SCORE ${prefs.bestScore}${timeLabel}`;
+      arcadeRecordNode.classList.remove("hidden");
+    } else {
+      arcadeRecordNode.classList.add("hidden");
+    }
   }
   startButton.disabled = false;
   startButton.innerHTML = gameMode === "versus"
@@ -309,6 +394,11 @@ function setGameMode(mode) {
     modeVersusButton.classList.toggle("active", gameMode === "versus");
     modeVersusButton.setAttribute("aria-selected", String(gameMode === "versus"));
   }
+  if (versusMoodRow) {
+    versusMoodRow.classList.toggle("hidden", gameMode !== "versus");
+  }
+  if (gameMode === "versus") setStageMood(versusStageMood);
+  else setStageMood(0);
   const intro = document.querySelector("#select-intro");
   const hint = document.querySelector("#select-hint");
   if (intro) {
@@ -327,6 +417,7 @@ function setGameMode(mode) {
 
 function buildRoster() {
   rosterNode.innerHTML = "";
+  const champions = new Set(readPrefs().champions || []);
   fighters.forEach((fighter, index) => {
     const button = document.createElement("button");
     button.className = "fighter-card";
@@ -334,13 +425,45 @@ function buildRoster() {
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", "false");
     button.style.setProperty("--accent", fighter.color);
+    const crownMarkup = champions.has(fighter.id) ? `<span class="champion-crown" title="Arcade Champion">★</span>` : "";
     button.innerHTML =
-      `<span class="card-cursor cursor-p1">1P</span><span class="card-cursor cursor-cpu">CPU</span>` +
+      `<span class="card-cursor cursor-p1">1P</span>${crownMarkup}<span class="card-cursor cursor-cpu">CPU</span>` +
       `<div class="card-head"><span class="portrait" aria-hidden="true">${fighter.initials}</span><strong>${fighter.name}</strong></div>` +
       `<div class="card-stats">${statRowMarkup("SPEED", fighter.stats.speed)}${statRowMarkup("POWER", fighter.stats.power)}${statRowMarkup("RHETORIC", fighter.stats.range)}</div>`;
+    if (typeof document.createElement === "function") {
+      const portraitCanvas = document.createElement("canvas");
+      portraitCanvas.width = 96;
+      portraitCanvas.height = 112;
+      portraitCanvas.className = "roster-portrait";
+      portraitCanvas.setAttribute("aria-hidden", "true");
+      const ctx = portraitCanvas.getContext?.("2d");
+      const head = button.querySelector?.(".card-head");
+      const initialsNode = button.querySelector?.(".portrait");
+      if (ctx && head && initialsNode && typeof head.replaceChild === "function") {
+        drawLadderPortrait(portraitCanvas, fighter);
+        head.replaceChild(portraitCanvas, initialsNode);
+      }
+    }
     button.addEventListener("click", () => {
-      if (gameMode === "versus" && p1Locked && !p2Locked) {
-        selectFighter(fighter.id, true, 2);
+      if (gameMode === "versus") {
+        if (!p1Locked) {
+          if (selectedId === fighter.id) {
+            p1Locked = true;
+            sound.select();
+            updateSelectDisplay();
+          } else {
+            selectFighter(fighter.id, true, 1);
+          }
+        } else if (!p2Locked) {
+          if (p2SelectedId === fighter.id) {
+            p2Locked = true;
+            sound.select();
+            updateSelectDisplay();
+            beginMatch();
+          } else {
+            selectFighter(fighter.id, true, 2);
+          }
+        }
       } else {
         selectFighter(fighter.id, true, 1);
       }
@@ -384,23 +507,30 @@ function showAnnouncer(headline = "ELEZIONI!", subline = tournament?.roundLabel 
 function disposeFighter(combatant) {
   clearSidestepGhosts(combatant);
   scene.remove(combatant.root);
+  const geometries = new Set();
+  const materials = new Set();
+  const maps = new Set();
   combatant.root.traverse((part) => {
     if (!part.isMesh) return;
-    part.geometry.dispose();
-    const materials = Array.isArray(part.material) ? part.material : [part.material];
-    materials.forEach((entry) => {
-      if (entry.map) entry.map.dispose();
-      entry.dispose();
-    });
+    if (part.geometry) geometries.add(part.geometry);
+    const list = Array.isArray(part.material) ? part.material : [part.material];
+    for (const entry of list) {
+      if (!entry) continue;
+      materials.add(entry);
+      if (entry.map) maps.add(entry.map);
+    }
   });
+  geometries.forEach((g) => g.dispose());
+  maps.forEach((m) => m.dispose());
+  materials.forEach((m) => m.dispose());
 }
 
 function showVersusScreen() {
   matchActive = false;
   victory = null;
   clearTimeout(versusTimeout);
-  setStageMood(0);
-  document.querySelector("#hud").classList.remove("active");
+  setStageMood(versusStageMood);
+  (hudNode || document.querySelector("#hud")).classList.remove("active");
   ladderScreen.classList.add("hidden");
   continueScreen.classList.add("hidden");
   if (versusScreen) versusScreen.classList.remove("hidden");
@@ -578,8 +708,12 @@ function clearProjectiles() {
     scene.remove(ballot.mesh);
     ballot.mesh.traverse((part) => {
       if (!part.isMesh) return;
-      part.geometry.dispose();
-      part.material.dispose();
+      if (typeof ballotGeometry === "undefined" || part.geometry !== ballotGeometry) {
+        part.geometry.dispose();
+      }
+      if (typeof ballotMaterialCache === "undefined" || ballotMaterialCache.get(ballot.color) !== part.material) {
+        part.material.dispose();
+      }
     });
     ballots.splice(i, 1);
   }
@@ -628,8 +762,13 @@ function startRound() {
     ? { stage: 0, reaction: 0, block: 0, sidestep: 0, speed: 1, combo: 1, launcher: 0, special: 0, damage: 1, health: 100 }
     : difficultyForStage(tournament.currentStage);
   const mirrorMatch = isVersus && tournament.playerId === tournament.opponentId;
-  player = createCombatant(fightersById.get(tournament.playerId), -2.7, 0.25, 1, true);
-  opponent = createCombatant(fightersById.get(tournament.opponentId), 2.7, -0.15, -1, false, { altSuit: mirrorMatch });
+  player = createCombatant(fightersById.get(tournament.playerId), -2.7, 0.25, 1, true, {
+    ringColor: isVersus ? "#ff5a36" : null
+  });
+  opponent = createCombatant(fightersById.get(tournament.opponentId), 2.7, -0.15, -1, false, {
+    altSuit: mirrorMatch,
+    ringColor: isVersus ? "#48b8ff" : null
+  });
   updateComboBadge(player);
   updateComboBadge(opponent);
   opponent.health = opponent.maxHealth = difficulty.health;
@@ -674,9 +813,11 @@ function startRound() {
   if (oppTag) oppTag.textContent = isVersus ? "2P" : "CPU";
   if (p1Label) p1Label.textContent = isVersus ? "CONSENSO 1P" : "CONSENSO";
   if (oppLabel) oppLabel.textContent = isVersus ? "CONSENSO 2P" : "APPROVAZIONE";
-  const stagePreset = atmosphere.applyStage(isVersus ? 1 : tournament.currentStage + 1);
-  document.querySelector(".edition").innerHTML = isVersus
-    ? `2P LOCAL VERSUS <span>•</span> BEST OF 3`
+  if (playerSuperBadge) playerSuperBadge.textContent = isVersus ? "SPECIAL READY [R]" : "SPECIAL READY [L]";
+  if (opponentSuperBadge) opponentSuperBadge.textContent = isVersus ? "SPECIAL READY [L / N6]" : "SPECIAL READY";
+  const stagePreset = atmosphere.applyStage(isVersus ? versusStageMood + 1 : tournament.currentStage + 1);
+  (editionNode || document.querySelector(".edition")).innerHTML = isVersus
+    ? `2P LOCAL VERSUS <span>•</span> ${stagePreset.label}`
     : `STAGE ${tournament.currentStage + 1}/8 <span>•</span> ${stagePreset.label}`;
   toast.textContent = isVersus
     ? `1P: [R] ${player.definition.special.toUpperCase()} · 2P: [L/NUM6] ${opponent.definition.special.toUpperCase()}`
@@ -722,7 +863,7 @@ function setPaused(paused) {
         controlsTitle.textContent = "PLAYER 1 (LEFT SIDE)";
         controlsList.innerHTML =
           `<div><dt><kbd>A</kbd> / <kbd>D</kbd></dt><dd>Walk / Back Guard</dd></div>` +
-          `<div><dt><kbd>W</kbd> / <kbd>S</kbd></dt><dd>Sidestep (tap) / Crouch</dd></div>` +
+          `<div><dt><kbd>W</kbd><kbd>W</kbd> / <kbd>S</kbd><kbd>S</kbd></dt><dd>Sidestep (double-tap) / Crouch</dd></div>` +
           `<div><dt><kbd>F</kbd> / <kbd>G</kbd></dt><dd>Left Punch / Right Punch</dd></div>` +
           `<div><dt><kbd>C</kbd> / <kbd>V</kbd></dt><dd>Left Kick / Right Kick</dd></div>` +
           `<div><dt><kbd>S+G</kbd> / <kbd>T</kbd></dt><dd>Launcher (Fwd+<kbd>F</kbd> Parry)</dd></div>` +
@@ -730,11 +871,16 @@ function setPaused(paused) {
         combosTitle.textContent = "PLAYER 2 (RIGHT SIDE / NUMPAD)";
         combosList.innerHTML =
           `<div><dt><kbd>←</kbd> / <kbd>→</kbd></dt><dd>Walk / Back Guard</dd></div>` +
-          `<div><dt><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>Sidestep (tap) / Crouch</dd></div>` +
+          `<div><dt><kbd>↑</kbd><kbd>↑</kbd> / <kbd>↓</kbd><kbd>↓</kbd></dt><dd>Sidestep (double-tap) / Crouch</dd></div>` +
           `<div><dt><kbd>J</kbd>/<kbd>N4</kbd> · <kbd>K</kbd>/<kbd>N5</kbd></dt><dd>Left Punch / Right Punch</dd></div>` +
           `<div><dt><kbd>N</kbd>/<kbd>N1</kbd> · <kbd>M</kbd>/<kbd>N2</kbd></dt><dd>Left Kick / Right Kick</dd></div>` +
           `<div><dt><kbd>↓+K</kbd> / <kbd>O</kbd></dt><dd>Launcher (Fwd+<kbd>J</kbd> Parry)</dd></div>` +
           `<div><dt><kbd>L</kbd> / <kbd>N6</kbd></dt><dd>Signature Special (100%)</dd></div>`;
+        if (typeof pauseVersusCombos !== "undefined" && pauseVersusCombos) {
+          pauseVersusCombos.innerHTML =
+            `COMBOS (BOTH PLAYERS): LP→LP→RP (Knockdown) · LP→RP→RK (Roundhouse) · LK→RK→RK (Heel Drop) · LP→LP→Launch (Juggle) · RP→RP→Special (Finisher)`;
+          pauseVersusCombos.classList.remove("hidden");
+        }
       } else {
         controlsTitle.textContent = "UNIVERSAL CONTROLS";
         controlsList.innerHTML =
@@ -751,6 +897,9 @@ function setPaused(paused) {
           `<div><dt><kbd>J</kbd> → <kbd>K</kbd> → <kbd>K</kbd></dt><dd>Double Kick Filibuster</dd></div>` +
           `<div><dt><kbd>U</kbd> → <kbd>U</kbd> → <kbd>S+I</kbd></dt><dd>Jab-to-Launcher Juggle Starter</dd></div>` +
           `<div><dt><kbd>I</kbd> → <kbd>I</kbd> → <kbd>L</kbd></dt><dd>Signature Special Finisher</dd></div>`;
+        if (typeof pauseVersusCombos !== "undefined" && pauseVersusCombos) {
+          pauseVersusCombos.classList.add("hidden");
+        }
       }
     }
     document.querySelector("#resume-button").focus();
@@ -847,8 +996,8 @@ function updateHealthDisplay() {
   opponentHealthNode.classList.toggle("low", opponentHealth <= 25);
   playerTrailNode.style.width = `${playerHealth}%`;
   opponentTrailNode.style.width = `${opponentHealth}%`;
-  document.querySelector("#player-percent").textContent = `${Math.ceil(playerHealth)}%`;
-  document.querySelector("#opponent-percent").textContent = `${Math.ceil(opponentHealth)}%`;
+  (playerPercentNode || document.querySelector("#player-percent")).textContent = `${Math.ceil(playerHealth)}%`;
+  (opponentPercentNode || document.querySelector("#opponent-percent")).textContent = `${Math.ceil(opponentHealth)}%`;
 
   if (playerOrbsNode && opponentOrbsNode && tournament?.roundWins) {
     [...playerOrbsNode.children].forEach((orb, idx) => orb.classList.toggle("won", idx < tournament.roundWins.player));
@@ -872,7 +1021,7 @@ function updateHealthDisplay() {
   }
 
   timerNode.textContent = `${Math.ceil(elapsed)}`;
-  document.querySelector("#round-status").textContent = `${tournament.roundLabel} · ${tournament.roundWins.player}–${tournament.roundWins.cpu}`;
+  (roundStatusNode || document.querySelector("#round-status")).textContent = `${tournament.roundLabel} · ${tournament.roundWins.player}–${tournament.roundWins.cpu}`;
 }
 
 function announceSpecial(combatant) {
@@ -896,10 +1045,14 @@ function spawnCallout(text, x, y, z) {
 
 function spawnBallot(x, y, z, direction, color = "#f4ecd8", scale = 1, properties = {}) {
   const group = new THREE.Group();
-  const paper = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.28 * scale, 0.19 * scale),
-    new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide })
-  );
+  const geo = typeof ballotGeometry !== "undefined"
+    ? ballotGeometry
+    : new THREE.PlaneGeometry(0.28, 0.19);
+  const mat = typeof getBallotMaterial === "function"
+    ? getBallotMaterial(color)
+    : new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
+  const paper = new THREE.Mesh(geo, mat);
+  paper.scale.set(scale, scale, 1);
   group.add(paper);
   group.position.set(x, y, z);
   scene.add(group);
@@ -979,7 +1132,9 @@ function spawnImpact(point, { launch = false, counter = false, special = false, 
       : new THREE.Vector3(random(0.85, 1.5), random(0.85, 1.5), random(0.85, 1.5));
     mesh.scale.copy(baseScale);
     if (velocity.lengthSq() > 0.001) {
-      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), velocity.clone().normalize());
+      const up = typeof _upVec !== "undefined" ? _upVec : new THREE.Vector3(0, 1, 0);
+      const dir = typeof _sparkDirVec !== "undefined" ? _sparkDirVec.copy(velocity).normalize() : velocity.clone().normalize();
+      mesh.quaternion.setFromUnitVectors(up, dir);
     }
     scene.add(mesh);
     impactEffects.push({
@@ -1150,7 +1305,17 @@ function getSpecial(combatant) {
 function useSpecial(combatant) {
   if (!combatant || !matchActive || combatant.cooldown > 0 || (combatant.recovery || 0) > 0 || combatant.stun > 0 || combatant.airborne || combatant.landingTime > 0) return false;
   if (!spendSuperMeter(combatant, SUPER_METER_COST)) {
-    if (combatant.isPlayer) sound.emptyClick?.();
+    if (combatant.isPlayer || (typeof gameMode !== "undefined" && gameMode === "versus")) {
+      sound.emptyClick?.();
+      const track = combatant.isPlayer
+        ? (typeof playerSuperTrack !== "undefined" ? playerSuperTrack : null)
+        : (typeof opponentSuperTrack !== "undefined" ? opponentSuperTrack : null);
+      if (track && track.classList) {
+        track.classList.remove("empty-flash");
+        if (typeof track.offsetWidth !== "undefined") void track.offsetWidth;
+        track.classList.add("empty-flash");
+      }
+    }
     return false;
   }
   combatant.usedSpecialInRound = true;
@@ -1494,6 +1659,7 @@ function renderVictoryQuote(winner, loser) {
   const quoteNode = document.querySelector("#result-quote");
   if (!quoteNode || typeof getWinQuote !== "function") return;
   const quote = getWinQuote(winner?.definition, loser?.definition);
+  if (typeof activeVictoryQuoteText !== "undefined") activeVictoryQuoteText = quote || "";
   if (!quote) return;
   quoteNode.classList.remove("hidden");
   const speakerId = winner?.definition?.id || "";
@@ -1515,6 +1681,7 @@ function finishRoundTransition(outcome) {
   else if (outcome === "continue") showContinue();
   else if (outcome === "versus-p1" || outcome === "versus-p2") {
     if (victory) victory.champion = true;
+    resultShownAt = performance.now();
     const p1Won = outcome === "versus-p1";
     const winner = p1Won ? player : opponent;
     const loser = p1Won ? opponent : player;
@@ -1538,6 +1705,17 @@ function finishRoundTransition(outcome) {
     rematchBtn.focus();
   } else {
     victory.champion = true;
+    resultShownAt = performance.now();
+    if (typeof readPrefs === "function" && typeof writePrefs === "function") {
+      const prefs = readPrefs();
+      const champions = new Set(prefs.champions || []);
+      if (player?.definition?.id) champions.add(player.definition.id);
+      const bestScore = Math.max(prefs.bestScore || 0, tournament.totalScore || 0);
+      const bestTimeMs = prefs.bestTimeMs
+        ? Math.min(prefs.bestTimeMs, victory.totalTime)
+        : victory.totalTime;
+      writePrefs({ bestScore, bestTimeMs, champions: [...champions] });
+    }
     document.querySelector("#hud").classList.remove("active");
     const eyebrow = document.querySelector("#result-eyebrow");
     const subtitle = document.querySelector("#result-subtitle");
@@ -2180,7 +2358,7 @@ function poseFighter(combatant, dt, opponentBody = null) {
   combatant.model.rotation.z = combatant.airRotation;
   combatant.model.position.y += Math.abs(Math.sin(combatant.airRotation)) * 0.38 * definition.height;
   if (opponentBody) {
-    const target = new THREE.Vector3();
+    const target = typeof _headTargetVec !== "undefined" ? _headTargetVec : new THREE.Vector3();
     opponentBody.joints.head.getWorldPosition(target);
     joints.head.parent.worldToLocal(target);
     target.sub(joints.head.position);
@@ -2266,6 +2444,9 @@ function updateCombatant(combatant, dt, opponentBody) {
       combatant.landingTime = 0.55;
       combatant.stun = Math.max(combatant.stun, 0.55);
       shake = Math.max(shake, 0.18);
+      if (typeof dynamicCamera !== "undefined" && typeof dynamicCamera.triggerShake === "function") {
+        dynamicCamera.triggerShake(0.18);
+      }
     }
     combatant.vy = 0;
   }
@@ -2325,6 +2506,15 @@ function updateBallots(dt) {
     if (ballot.projectile) checkSingleProjectile(ballot);
     if (ballot.life <= 0 || Math.abs(ballot.mesh.position.x) > 10 || ballot.mesh.position.y < -1) {
       scene.remove(ballot.mesh);
+      ballot.mesh.traverse?.((part) => {
+        if (!part.isMesh) return;
+        if (typeof ballotGeometry === "undefined" || part.geometry !== ballotGeometry) {
+          part.geometry?.dispose?.();
+        }
+        if (typeof ballotMaterialCache === "undefined" || ballotMaterialCache.get(ballot.color) !== part.material) {
+          part.material?.dispose?.();
+        }
+      });
       ballots.splice(i, 1);
     }
   }
@@ -2437,6 +2627,9 @@ function updateVictory(dt) {
       victory.groundAt = victory.time;
       koSlowMo = 0;
       shake = Math.max(shake, 0.24);
+      if (typeof dynamicCamera !== "undefined" && typeof dynamicCamera.triggerShake === "function") {
+        dynamicCamera.triggerShake(0.24);
+      }
       spawnBurst(loser, "#e2c896", 10);
       showAnnouncer("K.O. — MOZIONE APPROVATA!", "FINITO IL DIBATTITO", { ko: true, duration: 1.65 });
     }
@@ -2673,12 +2866,6 @@ function pollGamepads() {
   for (const [source, entry] of current) gamepadPrevious.set(source, entry);
 }
 
-function resolveKeyboardAction(event, map) {
-  const code = event.code ? event.code.toLowerCase() : "";
-  const k = event.key ? event.key.toLowerCase() : "";
-  return { token: map[code] ? code : k, action: map[code] || map[k] || null };
-}
-
 window.addEventListener("keydown", (event) => {
   const key = event.key.startsWith("Arrow") ? event.key : event.key.toLowerCase();
   const codeLower = event.code ? event.code.toLowerCase() : "";
@@ -2762,6 +2949,17 @@ window.addEventListener("keydown", (event) => {
     }
     if (!resultScreen.classList.contains("hidden") && (key === "enter" || key === " ")) {
       event.preventDefault();
+      if (performance.now() - resultShownAt < 450) return;
+      const quoteNode = document.querySelector("#result-quote");
+      if (quoteNode && quoteNode.classList.contains("is-typing")) {
+        if (typeof stopVictoryQuote === "function") {
+          stopVictoryQuote();
+          stopVictoryQuote = null;
+        }
+        if (activeVictoryQuoteText) quoteNode.textContent = activeVictoryQuoteText;
+        quoteNode.classList.remove("is-typing");
+        return;
+      }
       if (typeof gameMode !== "undefined" && gameMode === "versus") {
         const active = document.activeElement;
         if (active && resultScreen.contains(active) && active.tagName === "BUTTON") active.click();
@@ -2810,6 +3008,7 @@ window.addEventListener("gamepaddisconnected", () => {
 window.addEventListener("resize", updateTouchVisibility);
 touchToggle.addEventListener("click", () => {
   touchEnabled = !touchEnabled;
+  writePrefs({ touchEnabled });
   clearInputs();
   updateTouchVisibility();
 });
@@ -2835,10 +3034,26 @@ touchControls.addEventListener("lostpointercapture", releaseTouch);
 
 if (modeArcadeButton) modeArcadeButton.addEventListener("click", () => { sound.select(); setGameMode("arcade"); });
 if (modeVersusButton) modeVersusButton.addEventListener("click", () => { sound.select(); setGameMode("versus"); });
+if (versusMoodRow) {
+  versusMoodRow.addEventListener("click", (event) => {
+    const chip = event.target.closest?.("button[data-mood]");
+    if (!chip) return;
+    const moodStage = Number(chip.dataset.mood);
+    if (!Number.isFinite(moodStage)) return;
+    versusStageMood = moodStage;
+    [...versusMoodRow.querySelectorAll("button[data-mood]")].forEach((btn) => {
+      const active = btn === chip;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-checked", String(active));
+    });
+    sound.select();
+    setStageMood(versusStageMood);
+  });
+}
 startButton.addEventListener("click", beginMatch);
 document.querySelector("#next-stage-button").addEventListener("click", startRound);
 document.querySelector("#continue-button").addEventListener("click", retryStage);
-document.querySelector("#quit-button").addEventListener("click", returnToTitleScreen);
+document.querySelector("#quit-button").addEventListener("click", () => returnToTitleScreen());
 document.querySelector("#rematch-button").addEventListener("click", () => {
   if (gameMode === "versus" && tournament) {
     tournament.retry();
@@ -2851,11 +3066,11 @@ document.querySelector("#rematch-button").addEventListener("click", () => {
 });
 if (versusChangeButton) versusChangeButton.addEventListener("click", () => returnToTitleScreen("versus"));
 if (versusMenuButton) versusMenuButton.addEventListener("click", () => returnToTitleScreen("arcade"));
-document.querySelector("#change-fighter-button").addEventListener("click", returnToTitleScreen);
+document.querySelector("#change-fighter-button").addEventListener("click", () => returnToTitleScreen());
 pauseButton.addEventListener("click", () => setPaused(true));
 document.querySelector("#resume-button").addEventListener("click", () => setPaused(false));
 document.querySelector("#restart-button").addEventListener("click", restartMatch);
-document.querySelector("#pause-quit-button").addEventListener("click", returnToTitleScreen);
+document.querySelector("#pause-quit-button").addEventListener("click", () => returnToTitleScreen());
 
 if (!sound.available) {
   musicToggle.disabled = true;
@@ -2878,12 +3093,23 @@ function unlockAudio() {
 window.addEventListener("pointerdown", unlockAudio, true);
 window.addEventListener("touchstart", unlockAudio, true);
 window.addEventListener("keydown", unlockAudio, true);
+if (typeof savedPrefs.musicEnabled === "boolean") {
+  musicToggle.setAttribute("aria-pressed", String(savedPrefs.musicEnabled));
+  musicToggle.textContent = `Music: ${savedPrefs.musicEnabled ? "On" : "Off"}`;
+  sound.setMusicEnabled(savedPrefs.musicEnabled);
+}
+if (sfxToggle && typeof savedPrefs.sfxEnabled === "boolean") {
+  sfxToggle.setAttribute("aria-pressed", String(savedPrefs.sfxEnabled));
+  sfxToggle.textContent = `SFX: ${savedPrefs.sfxEnabled ? "On" : "Off"}`;
+  sound.setSfxEnabled(savedPrefs.sfxEnabled);
+}
 musicToggle.addEventListener("click", () => {
   sound.unlock();
   const enabled = musicToggle.getAttribute("aria-pressed") !== "true";
   musicToggle.setAttribute("aria-pressed", String(enabled));
   musicToggle.textContent = `Music: ${enabled ? "On" : "Off"}`;
   sound.setMusicEnabled(enabled);
+  writePrefs({ musicEnabled: enabled });
 });
 if (sfxToggle) {
   sfxToggle.addEventListener("click", () => {
@@ -2892,6 +3118,7 @@ if (sfxToggle) {
     sfxToggle.setAttribute("aria-pressed", String(enabled));
     sfxToggle.textContent = `SFX: ${enabled ? "On" : "Off"}`;
     sound.setSfxEnabled(enabled);
+    writePrefs({ sfxEnabled: enabled });
   });
 }
 

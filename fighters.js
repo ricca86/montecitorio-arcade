@@ -121,7 +121,7 @@ export const fighters = [
     height: 1.04,
     stats: { speed: 3, power: 3, range: 5 },
     special: "DPCM Midnight Decree",
-    moveLine: "Unblockable mid-range paper slap",
+    moveLine: "High-pressure mid-range decree wave",
     quip: "DECRETO!",
     prop: "pen",
     slickHair: true

@@ -339,10 +339,17 @@ export function createAtmosphereRig(scene, renderer = null, initialArena = null)
 export function createDynamicCamera(camera) {
   const rigPos = new THREE.Vector3(0, 7.4, 17.4);
   const targetPos = new THREE.Vector3(0, 1.5, -0.5);
+  const _focus = new THREE.Vector3();
+  const _desired = new THREE.Vector3();
   let shake = 0;
   let tilt = 0;
   let zoomPunch = 0;
   let exchangeHold = 0;
+
+  function triggerShake(amount = 0.18) {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    shake = Math.max(shake, clamp(amount, 0, 0.6));
+  }
 
   function triggerImpact({
     launch = false,
@@ -380,9 +387,9 @@ export function createDynamicCamera(camera) {
   }
 
   function update(dt, { player, opponent, victory, koSlowMo = 0 } = {}) {
-    const focus = new THREE.Vector3(0, 1.5, -0.5);
+    _focus.set(0, 1.5, -0.5);
     let distance = 17.4;
-    let desired = null;
+    let hasDesired = false;
     let closeCombo = false;
 
     if (victory) {
@@ -391,13 +398,14 @@ export function createDynamicCamera(camera) {
       const fallingSlowMo = koSlowMo > 0 || (victory.reason === "knockout" && !victory.koSlammed);
       if (fallingSlowMo) {
         // Dramatic K.O. slow-motion zoom toward the falling loser
-        focus.set(
+        _focus.set(
           THREE.MathUtils.lerp(winner.x, loser.x, 0.72),
           1.05 + loser.y * 0.55,
           THREE.MathUtils.lerp(winner.z, loser.z, 0.72)
         );
         distance = clamp(6.0 - zoomPunch * 0.45, 4.4, 7.2);
-        desired = new THREE.Vector3(focus.x + winner.facing * 0.65, focus.y + 0.95, focus.z + distance);
+        _desired.set(_focus.x + winner.facing * 0.65, _focus.y + 0.95, _focus.z + distance);
+        hasDesired = true;
       } else {
         // Dramatic low-angle close-up orbit of the winner performing their victory pose
         const orbitTime = victory.groundAt !== null && victory.groundAt !== undefined
@@ -406,17 +414,18 @@ export function createDynamicCamera(camera) {
         const maxOffset = Math.min(0.6, camera.aspect * 0.4);
         const offset = clamp((loser.x - winner.x) * 0.25, -maxOffset, maxOffset);
         const wHeight = winner.definition?.height || 1;
-        focus.set(winner.x + offset, winner.y + 1.48 * wHeight, winner.z);
+        _focus.set(winner.x + offset, winner.y + 1.48 * wHeight, winner.z);
         distance = Math.max(3.9, 1.15 / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
         const orbitAngle = winner.facing * 0.36 - winner.facing * Math.min(orbitTime * 0.72, 0.95);
-        desired = new THREE.Vector3(
+        _desired.set(
           winner.x + Math.sin(orbitAngle) * distance,
           winner.y + 0.72,
           winner.z + Math.cos(orbitAngle) * distance
         );
+        hasDesired = true;
       }
     } else if (player && opponent) {
-      focus.set(
+      _focus.set(
         (player.x + opponent.x) / 2,
         1.42 + Math.max(player.y, opponent.y) * 0.35,
         (player.z + opponent.z) / 2
@@ -435,14 +444,14 @@ export function createDynamicCamera(camera) {
       distance = clamp(Math.max(8.6 + span * 0.68, horizontalFit + 2.4) - comboZoom - zoomPunch, 6.0, 48);
     }
 
-    if (!desired) {
+    if (!hasDesired) {
       const heightRatio = closeCombo ? 0.24 : 0.28;
-      desired = new THREE.Vector3(focus.x, focus.y + distance * heightRatio, focus.z + distance);
+      _desired.set(_focus.x, _focus.y + distance * heightRatio, _focus.z + distance);
     }
 
     const smoothing = 1 - Math.exp(-(zoomPunch > 0.2 ? 6.4 : 3.9) * dt);
-    rigPos.lerp(desired, smoothing);
-    targetPos.lerp(focus, smoothing);
+    rigPos.lerp(_desired, smoothing);
+    targetPos.lerp(_focus, smoothing);
     camera.position.copy(rigPos);
 
     if (shake > 0) {
@@ -465,6 +474,7 @@ export function createDynamicCamera(camera) {
     rigPos,
     targetPos,
     getState: () => ({ shake, tilt, zoomPunch, exchangeHold }),
+    triggerShake,
     triggerImpact,
     triggerKO,
     update

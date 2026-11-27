@@ -1,8 +1,7 @@
 # Montecitorio: Floor Fight!
 
 A small, static 3D arcade fighter built with Three.js and ES modules. No build step is required.
-Fighters are assembled procedurally from low-poly meshes and 64×64 nearest-filtered
-canvas textures; no external character models or texture assets are needed.
+Fighters are assembled procedurally from low-poly meshes and 128×128 fighter textures and 256×256 arena textures; no external character models or texture assets are needed.
 Their accessories use spring follow-through, while sidesteps leave brief visual
 afterimages. Signature poses and jumps are visual only and do not change hit timing
 or movement rules.
@@ -23,7 +22,7 @@ Then open <http://localhost:8000>. Three.js is bundled with the project, so no e
 - Double-tap `W` / `S`: sidestep
 - `U` / `I` / `J` / `K`: left punch, right punch, left kick, right kick
 - `S` + `I`: launcher
-- `L`: signature move
+- `L`: signature move (requires 100% Super Meter; see below)
 - Neutral or hold away from the opponent: standing guard against high and mid attacks.
   Hold `S` + away to guard lows and duck high jabs; press `I` within 250 ms of
   releasing `S` for a rising launcher. `Shift` also guards (with `S` for low guard).
@@ -37,7 +36,16 @@ Then open <http://localhost:8000>. Three.js is bundled with the project, so no e
   to character select. Restart restores the score and streak from the start of
   the current stage.
 
-Touch devices show the virtual pad automatically; **Touch Pad: On/Off** also
+## 2P Local Versus & Controls
+
+In **2P Local Versus** mode, two players compete locally on the same device with disjoint split keyboard layouts, mirror-match alternate suits, stage lighting selection, and automatic gamepad routing:
+
+- **Player 1**: `A` / `D` move, double-tap `W` / `S` sidestep, `S` + back low guard, `F` / `G` / `C` / `V` limbs (LP/RP/LK/RK), forward + `F` parry, `S` + `G` or `T` launcher, `R` signature move.
+- **Player 2**: `←` / `→` move, double-tap `↑` / `↓` sidestep, `↓` + back low guard, `J` / `K` / `N` / `M` (or Numpad `4`/`5`/`1`/`2`) limbs, forward + `J` parry, `↓` + `K` or `O` (or Numpad `3`/`0`) launcher, `L` (or Numpad `6`) signature move.
+- **Gamepads**: With 2 controllers, Pad 1 controls P1 and Pad 2 controls P2; with 1 controller, it controls P2 by default so P1 can stay on keyboard.
+- **Mirror Matches**: Automatically apply an alternate suit palette for P2 when both players pick the same candidate.
+
+Touch devices show the virtual pad automatically; **Touch Pad: On/Off** in the header also
 enables it on desktop. Hold directions while tapping limb buttons to guard,
 parry, or enter combos. Touch up/down once to sidestep; hold down and back to
 guard low. The Launch and Special buttons provide direct shortcuts. On standard
@@ -47,7 +55,18 @@ R2 for special, and Start for pause. Double-tap up/down on a gamepad to
 sidestep. Use directions and Cross to navigate menus; Start confirms selection
 and toggles pause during a match.
 
-Guards take 15% damage; unblockable moves bypass them. Hitting an opponent in
+## Super Meter (Consenso / Approvazione)
+
+Landing strikes, blocking, parrying, and taking hits builds your **Super Meter** up to 100%:
+
+- **Light strikes (`U`, `J`)**: +8% attacker
+- **Heavy strikes (`I`, `K`) / Launchers**: +14% attacker
+- **Blocks / Parries / Counter-Hit bonus**: +12%
+- **Receiving unblocked damage**: +6%
+
+At **100%**, your fighter's hands and signature prop glow and pressing `L` (or `R` for P1 in 2P Versus) unleashes your **Signature Move**. Signature Moves deal 4% chip damage when blocked and can be interrupted during early startup (refunding 50% meter).
+
+Guards take 15% damage on normal attacks; unblockable moves bypass them. Hitting an opponent in
 attack startup deals 1.35× damage and adds 40 ms of hit-stop; a counter-hit
 knockdown launches instead. Later-stage opponents guard combos and punish whiffs.
 

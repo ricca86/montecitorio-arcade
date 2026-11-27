@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#16121d">
     <title>Montecitorio: Floor Fight!</title>
-    <link rel="stylesheet" href="./style.css?v=8">
+    <link rel="stylesheet" href="./style.css?v=9">
   </head>
   <body>
     <main class="game-shell">
@@ -19,6 +19,7 @@
         </div>
         <div class="header-actions">
           <p class="edition">LIVE FROM THE CHAMBER <span>•</span> ROUND 1</p>
+          <button id="touch-toggle" class="music-toggle touch-toggle" type="button" aria-pressed="false">TOUCH PAD: OFF</button>
           <button id="sfx-toggle" class="music-toggle" type="button" aria-label="Sound effects" aria-pressed="true">SFX: On</button>
           <button id="music-toggle" class="music-toggle" type="button" aria-label="Background music" aria-pressed="false">Music: Off</button>
         </div>
@@ -30,8 +31,7 @@
           <strong>Could not start the game.</strong>
           <span>Reload the page and check that your browser supports WebGL and has hardware acceleration enabled.</span>
         </div>
-        <div id="hud" class="hud" aria-live="polite">
-          <button id="touch-toggle" class="music-toggle touch-toggle" type="button" aria-pressed="false">TOUCH PAD: OFF</button>
+        <div id="hud" class="hud">
           <div class="combatant combatant-left">
             <div class="fighter-heading"><span class="player-tag">1P</span><strong id="player-name">—</strong></div>
             <div class="round-orbs" id="player-orbs" aria-label="Player round wins"><span class="round-orb"></span><span class="round-orb"></span></div>
@@ -44,7 +44,7 @@
             <div id="player-super-badge" class="super-badge" aria-hidden="true">SPECIAL READY [L]</div>
           </div>
           <div class="round-clock">
-            <span class="clock-label" id="round-status">ROUND 1 · 0–0</span>
+            <span class="clock-label" id="round-status" aria-live="polite">ROUND 1 · 0–0</span>
             <strong id="timer">60</strong>
             <button id="pause-button" class="pause-button" type="button" aria-controls="pause-screen" aria-expanded="false">PAUSE / MOVES [ESC]</button>
           </div>
@@ -96,6 +96,13 @@
               <button id="mode-versus" class="mode-tab" type="button" role="tab" aria-selected="false">[ 2P LOCAL VERSUS ]</button>
             </div>
             <h2>Select your <em>fighter</em></h2>
+            <div id="versus-mood-row" class="versus-mood-row hidden" role="radiogroup" aria-label="Arena lighting">
+              <span class="mood-label">CHAMBER TIME</span>
+              <button type="button" class="mood-chip active" data-mood="0" role="radio" aria-checked="true">Morning</button>
+              <button type="button" class="mood-chip" data-mood="3" role="radio" aria-checked="false">Afternoon</button>
+              <button type="button" class="mood-chip" data-mood="6" role="radio" aria-checked="false">Midnight</button>
+            </div>
+            <p id="arcade-record" class="arcade-record hidden"></p>
             <p id="select-intro" class="select-intro">ELEZIONI 2027 ARCADE LADDER · Seven rivals and a final boss await.</p>
             <div id="roster" class="roster" role="listbox" aria-label="Select a fighter"></div>
             <div class="select-footer">
@@ -104,6 +111,7 @@
                 <strong id="detail-name">Choose a fighter</strong>
                 <span id="detail-move">Signature move: —</span>
                 <div id="detail-stats" class="detail-stats" aria-hidden="true"></div>
+                <div id="versus-detail-grid" class="versus-detail-grid hidden"></div>
               </div>
               <button id="start-button" class="primary-button" disabled>Enter the chamber <span aria-hidden="true">↗</span></button>
             </div>
@@ -154,7 +162,7 @@
             <h2>CONTINUE? <span id="continue-count">9</span></h2>
             <p>Retry this stage with your score reset, or return to character select.</p>
             <button id="continue-button" class="primary-button">Continue</button>
-            <button id="quit-button" class="primary-button">Return to select</button>
+            <button id="quit-button" class="secondary-button">Return to select</button>
           </div>
         </section>
 
@@ -207,6 +215,7 @@
                 </dl>
               </section>
             </div>
+            <div id="pause-versus-combos" class="pause-versus-combos hidden"></div>
             <div class="pause-actions">
               <button id="resume-button" class="primary-button" type="button">RESUME FIGHT</button>
               <button id="restart-button" class="secondary-button" type="button">RESTART MATCH</button>
@@ -221,7 +230,7 @@
 
       <p class="disclaimer">A playful work of political satire. No actual parliamentary procedure was harmed.</p>
     </main>
-    <script id="game-module" type="module" src="./game.js?v=8"></script>
+    <script id="game-module" type="module" src="./game.js?v=9"></script>
     <script>
       function showStartupError() {
         document.querySelector("#engine-error").classList.remove("hidden");

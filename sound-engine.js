@@ -165,7 +165,20 @@ function playNoiseSweep(
   src.stop(start + duration);
 }
 
-function addStereoSlapback(sourceGain, delaySeconds = 0.052, feedbackLevel = 0.28, destination = sfxBus) {
+function scheduleDisconnect(nodes, delayMs = 600) {
+  const timer = setTimeout(() => {
+    for (const node of nodes) {
+      try {
+        node?.disconnect?.();
+      } catch {
+        // Already disconnected
+      }
+    }
+  }, delayMs);
+  timer?.unref?.();
+}
+
+function addStereoSlapback(sourceGain, delaySeconds = 0.052, feedbackLevel = 0.28, destination = sfxBus, cleanupMs = 900) {
   if (typeof context.createDelay !== "function") return;
   const delay = context.createDelay(0.5);
   const wet = context.createGain();
@@ -176,6 +189,7 @@ function addStereoSlapback(sourceGain, delaySeconds = 0.052, feedbackLevel = 0.2
   sourceGain.connect(delay);
   delay.connect(wet);
   connectWithPan(wet, destination, 0.55);
+  scheduleDisconnect([delay, wet], cleanupMs);
 }
 
 function syncSfxGain() {
@@ -392,6 +406,7 @@ function heavyImpactCrash(pan = 0) {
 
   // Crunch noise blast
   playNoiseSweep(0.32, 0.30, 2100, 580, "bandpass", { q: 0.9, start: now, destination: crashOut });
+  scheduleDisconnect([crashOut, ringGain, modDepth, env], 700);
 }
 
 /**
@@ -461,6 +476,7 @@ function knockout() {
   playTone(138, 26, 0.85, 0.72, "sine", now, gongBus);
   playFM(245, 78, 368, 260, 0.82, 0.28, { carrierType: "triangle", modType: "sine", start: now, destination: gongBus });
   playNoiseSweep(0.45, 0.28, 1600, 260, "lowpass", { q: 0.8, start: now, destination: gongBus });
+  scheduleDisconnect([gongBus], 1250);
 }
 
 /**
@@ -553,6 +569,7 @@ function victoryFanfare() {
   }
   // Harmonic fifth shimmer under the triumphant final C5 stab
   playTone(VICTORY_FANFARE_NOTES[1], VICTORY_FANFARE_NOTES[1], 0.54, 0.10, "sawtooth", now + 0.28, brassFilter, -0.12);
+  scheduleDisconnect([brassFilter], 1100);
 }
 
 /**

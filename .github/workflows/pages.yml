@@ -22,10 +22,16 @@ jobs:
         uses: actions/checkout@v4
       - name: Configure Pages
         uses: actions/configure-pages@v5
+      - name: Build Staging Site
+        run: |
+          mkdir -p _site
+          cp index.html style.css LICENSE _site/
+          cp *.js _site/
+          if [ -d vendor ]; then cp -r vendor _site/; fi
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
   deploy:
     needs: build
